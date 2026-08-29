@@ -1,0 +1,284 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   Light only. No dark mode — `color-scheme: light` also forces form controls,
+   scrollbars and focus rings to render light regardless of the OS setting.
+   --------------------------------------------------------------------------- */
+
+:root {
+  color-scheme: light;
+
+  /* Ink — every value below is contrast-checked against the glass pane
+     (~#f2f5f9 effective). label-3 clears 4.2:1, so even tertiary metadata is
+     legible at a glance rather than merely present. */
+  --label: #16181d;
+  --label-2: #5c5c66;
+  --label-3: #74747f;
+
+  /* Hairlines and fills that sit ON glass */
+  --sep: rgba(60, 60, 67, 0.1);
+  --sep-strong: rgba(60, 60, 67, 0.18);
+  --fill: rgba(120, 120, 128, 0.09);
+  --fill-2: rgba(120, 120, 128, 0.16);
+
+  /* --- ESI acuity ramp ---------------------------------------------------
+     A monotonic red -> green severity scale. Every step carries white text at
+     >= 4.9:1, so the digit inside the badge is readable at arm's length and
+     under a bad monitor. Deliberately not the brighter Apple system hues:
+     those measured 3.0-4.2:1 and failed. Clarity beats decoration here. */
+  --esi-1: #b3251c; /* 6.57:1 — immediate */
+  --esi-2: #c04708; /* 5.07:1 — emergent */
+  --esi-3: #96650a; /* 5.04:1 — urgent */
+  --esi-4: #4f7d18; /* 4.91:1 — less urgent */
+  --esi-5: #15794a; /* 5.43:1 — non-urgent */
+
+  /* --- Escalation status -------------------------------------------------
+     Same hue family as the acuity ramp so the two scales read as one system. */
+  --st-critical: #b3251c; /* 6.00:1 on glass */
+  --st-escalated: #a94f04; /* 5.04:1 */
+  --st-watch: #8a5e00; /* 5.22:1 */
+  --st-stable: #15794a; /* 4.97:1 */
+
+  /* Accent + supporting colours */
+  --blue: #0062c4;
+  --red: #b3251c;
+  --orange: #a94f04;
+  --yellow: #8a5e00;
+  --green: #15794a;
+  --indigo: #4b48c9;
+  --teal: #1d7f92;
+  --gray: #74747f;
+
+  /* Tints — the wash behind a flagged row or chip */
+  --blue-tint: rgba(0, 98, 196, 0.1);
+  --red-tint: rgba(179, 37, 28, 0.1);
+  --orange-tint: rgba(169, 79, 4, 0.12);
+  --yellow-tint: rgba(138, 94, 0, 0.13);
+  --green-tint: rgba(21, 121, 74, 0.12);
+  --indigo-tint: rgba(75, 72, 201, 0.11);
+  --gray-tint: rgba(120, 120, 128, 0.13);
+
+  /* Row washes for the queue. Stronger than a chip tint — an escalated row has
+     to be findable by peripheral vision, not by reading it. */
+  --row-critical: rgba(179, 37, 28, 0.11);
+  --row-critical-hover: rgba(179, 37, 28, 0.17);
+  --row-escalated: rgba(169, 79, 4, 0.09);
+  --row-escalated-hover: rgba(169, 79, 4, 0.15);
+
+  /* --- Liquid Glass ------------------------------------------------------
+     Each material is three things stacked: a translucent base, a specular
+     sheen raked across the top-left, and a rim light on the edge. The blur
+     is what makes it read as glass rather than as a white box — it has to
+     have something behind it to refract, which is what the page wash is for. */
+
+  --glass-blur: saturate(180%) blur(28px);
+  --glass-blur-heavy: saturate(190%) blur(44px);
+
+  --sheen: linear-gradient(
+    148deg,
+    rgba(255, 255, 255, 0.66) 0%,
+    rgba(255, 255, 255, 0.26) 24%,
+    rgba(255, 255, 255, 0.04) 52%,
+    rgba(255, 255, 255, 0.16) 100%
+  );
+
+  /* Rim light + soft ambient occlusion under the pane */
+  --rim: inset 0 0.5px 0 0 rgba(255, 255, 255, 0.95),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.5),
+    inset 0 -0.5px 0 0 rgba(255, 255, 255, 0.35);
+  --lift: 0 1px 1.5px rgba(22, 24, 29, 0.035), 0 6px 16px rgba(22, 24, 29, 0.05),
+    0 18px 44px rgba(22, 24, 29, 0.055);
+  --lift-hover: 0 1px 1.5px rgba(22, 24, 29, 0.04), 0 10px 26px rgba(22, 24, 29, 0.07),
+    0 28px 64px rgba(22, 24, 29, 0.08);
+  --lift-lg: 0 2px 4px rgba(22, 24, 29, 0.05), 0 32px 80px rgba(22, 24, 29, 0.16);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background-color: #e7ecf4;
+  color: var(--label);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.008em;
+}
+
+/* The wash. Glass needs content behind it or it is just a white rectangle —
+   these soft colour fields are what the panes pick up and refract. Large,
+   well-separated hues so the refraction shifts as you move down the page. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -30%;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(52rem 40rem at 6% -4%, rgba(0, 122, 255, 0.3), transparent 60%),
+    radial-gradient(44rem 34rem at 74% -6%, rgba(120, 88, 232, 0.26), transparent 62%),
+    radial-gradient(50rem 40rem at 96% 62%, rgba(38, 186, 208, 0.24), transparent 62%),
+    radial-gradient(42rem 34rem at 24% 104%, rgba(255, 138, 60, 0.2), transparent 62%),
+    radial-gradient(38rem 30rem at 62% 44%, rgba(255, 255, 255, 0.72), transparent 68%);
+  filter: blur(28px);
+}
+
+/* A whisper of grain. Below the threshold of notice, but it stops the large
+   gradients from banding and gives the glass something to sit on. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.032;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+@layer components {
+  /* Primary pane — cards, sheets, the toolbar. */
+  .glass {
+    background-image: var(--sheen);
+    background-color: rgba(255, 255, 255, 0.56);
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+    box-shadow: var(--rim), var(--lift);
+  }
+
+  /* Panes that respond to the pointer lift very slightly, as if picked up. */
+  .glass-interactive {
+    transition:
+      box-shadow 0.35s cubic-bezier(0.32, 0.72, 0, 1),
+      transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  .glass-interactive:hover {
+    box-shadow: var(--rim), var(--lift-hover);
+    transform: translateY(-1px);
+  }
+
+  /* Recessed pane nested inside a .glass — a lens within a lens. */
+  .glass-soft {
+    background-image: linear-gradient(
+      148deg,
+      rgba(255, 255, 255, 0.54) 0%,
+      rgba(255, 255, 255, 0.16) 40%,
+      rgba(255, 255, 255, 0.02) 100%
+    );
+    background-color: rgba(255, 255, 255, 0.36);
+    box-shadow: inset 0 0.5px 0 0 rgba(255, 255, 255, 0.85),
+      inset 0 0 0 0.5px rgba(255, 255, 255, 0.38);
+  }
+
+  /* Floating chrome that must stay legible over anything — heavier blur. */
+  .glass-bar {
+    background-image: var(--sheen);
+    background-color: rgba(255, 255, 255, 0.66);
+    -webkit-backdrop-filter: var(--glass-blur-heavy);
+    backdrop-filter: var(--glass-blur-heavy);
+    box-shadow: var(--rim), var(--lift);
+  }
+
+  /* Modal sheet — most opaque of the three, so long-form text stays readable. */
+  .glass-sheet {
+    background-image: var(--sheen);
+    background-color: rgba(255, 255, 255, 0.78);
+    -webkit-backdrop-filter: var(--glass-blur-heavy);
+    backdrop-filter: var(--glass-blur-heavy);
+    box-shadow: var(--rim), var(--lift-lg);
+  }
+
+  /* Tinted glass — the pane picks up a colour wash without losing the sheen.
+     The tint is layered *over* the specular gradient, under the white base. */
+  .glass-tint-red {
+    background-image: linear-gradient(0deg, var(--red-tint), var(--red-tint)),
+      var(--sheen);
+  }
+  .glass-tint-indigo {
+    background-image: linear-gradient(0deg, var(--indigo-tint), var(--indigo-tint)),
+      var(--sheen);
+  }
+
+  /* Control track — the well a segmented control's thumb slides in. */
+  .glass-well {
+    background-color: rgba(120, 120, 128, 0.12);
+    box-shadow: inset 0 1px 2px rgba(22, 24, 29, 0.08),
+      inset 0 0 0 0.5px rgba(255, 255, 255, 0.3);
+  }
+
+  /* The thumb itself, and small raised controls. */
+  .glass-raised {
+    background-image: linear-gradient(
+      170deg,
+      rgba(255, 255, 255, 1),
+      rgba(255, 255, 255, 0.88)
+    );
+    box-shadow: 0 0 0 0.5px rgba(22, 24, 29, 0.05),
+      0 1px 1px rgba(22, 24, 29, 0.04), 0 4px 10px rgba(22, 24, 29, 0.1),
+      inset 0 0.5px 0 0 rgba(255, 255, 255, 1);
+  }
+}
+
+/* Queue re-sort. The FLIP transform itself has to be set from JS (it is a
+   measured per-row delta, not a style), but the easing lives here so the
+   motion stays consistent with every other transition in the app. */
+.row-glide {
+  transition: transform 520ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Numbers that update in place must not reflow their neighbours. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* Optical tightening for large display type, the way SF Pro Display is tracked. */
+.display {
+  letter-spacing: -0.022em;
+}
+.display-tight {
+  letter-spacing: -0.032em;
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background-clip: padding-box;
+  border: 3.5px solid transparent;
+  border-radius: 99px;
+  background-color: rgba(60, 60, 67, 0.22);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(60, 60, 67, 0.38);
+}
+
+:focus-visible {
+  outline: 3px solid rgba(0, 113, 227, 0.4);
+  outline-offset: 2px;
+  border-radius: 10px;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+/* Motion is a nicety here, never the signal — every state the animations carry
+   is also carried by colour, weight and position. Under a reduced-motion
+   preference the queue snaps instead of gliding and nothing is lost. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

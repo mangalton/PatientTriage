@@ -586,4 +586,3 @@ patients are fabricated in [`src/lib/seed.ts`](src/lib/seed.ts) — names are
 randomly assembled and correspond to no one. There is no database, no persistence
 to disk, and no telemetry. All model inference is local: the only network
 connection the application makes is to `127.0.0.1:11434`.
-# PatientTriage
