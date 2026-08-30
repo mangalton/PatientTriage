@@ -12,6 +12,7 @@
  */
 
 import { simMinutesAt } from "./clock";
+import { AGE_BAND_CHART, adultChartScore, ageBandFor, earlyWarningScore, ewsBand } from "./ews";
 import {
   INITIAL_SIM_MINUTES,
   SEED_PATIENTS,
@@ -19,20 +20,21 @@ import {
   buildHistoricalArrivals,
   buildPatients,
   clampAcuity,
+  SURGE_PATIENTS,
 } from "./seed";
 import { scorePatient } from "./scorer";
 import {
   computeUrgency,
   escalationStatus,
   findEscalationCrossing,
-  newsBand,
-  newsScore,
   projectVitals,
+  SAFE_WAIT_MINUTES,
   VITALS_STALE_AFTER_MINUTES,
 } from "./urgency";
 import type {
   AcuityLevel,
   AuditEvent,
+  DataCompleteness,
   Bed,
   ClockState,
   OverrideRecord,
@@ -49,6 +51,8 @@ interface Store {
   clock: ClockState;
   /** Guards against kicking off the initial scoring sweep more than once. */
   scoringSweepStarted: boolean;
+  /** True once the 3x surge cohort has been admitted. */
+  surgeActive: boolean;
   seq: number;
 }
 
@@ -65,6 +69,7 @@ function createStore(): Store {
       rate: 0,
     },
     scoringSweepStarted: false,
+    surgeActive: false,
     seq: 0,
   };
 }
@@ -106,6 +111,32 @@ export function currentSimMinutes(): number {
 // Derived view
 // ---------------------------------------------------------------------------
 
+/**
+ * What we actually know about this patient at intake.
+ *
+ * Missing information is never treated as reassuring — the score it produces
+ * feeds the precautionary uplift, which only ever raises urgency.
+ */
+export function assessCompleteness(p: Patient): DataCompleteness {
+  const missing: string[] = [];
+  const hasPriorRecord = p.priorRecord !== null;
+  if (!hasPriorRecord) missing.push("prior record");
+  if (!p.narrative || p.narrative.length < 40) missing.push("history detail");
+  for (const v of p.unobtainableVitals) missing.push(`vital:${v}`);
+
+  // Six expected inputs: prior record, narrative, and four core vital groups.
+  const expected = 6;
+  const score = Math.max(0, Math.min(1, (expected - missing.length) / expected));
+
+  return {
+    score: Math.round(score * 100) / 100,
+    missing,
+    hasPriorRecord,
+    hasFullVitals: p.unobtainableVitals.length === 0,
+    zeroHistory: !hasPriorRecord,
+  };
+}
+
 export function effectiveAcuity(p: Patient): AcuityLevel {
   if (p.overrideAcuity !== null) return p.overrideAcuity;
   if (p.ai) return p.ai.acuity_level;
@@ -130,11 +161,17 @@ export function snapshot(simMinutes = currentSimMinutes()): PatientSnapshot[] {
       p.id,
     );
     const currentVitals = projected.vitals;
-    const news = newsScore(currentVitals);
+
+    // Age band decides which early-warning chart applies. Never assume adult.
+    const band = ageBandFor(p.age);
+    const news = earlyWarningScore(currentVitals, p.age);
+
+    const completeness = assessCompleteness(p);
     const acuity = effectiveAcuity(p);
     const atypical = p.ai?.atypical_presentation_flag ?? false;
     const ambient = p.ambient !== null;
     const riskFactors = p.ai?.risk_factors ?? [];
+    const confidence = p.ai?.confidence;
 
     const urgencyBreakdown = computeUrgency({
       acuity,
@@ -142,6 +179,10 @@ export function snapshot(simMinutes = currentSimMinutes()): PatientSnapshot[] {
       atypical,
       ambient,
       riskFactors,
+      age: p.age,
+      ageBand: band,
+      confidence,
+      completeness,
       vitals: currentVitals,
     });
 
@@ -151,26 +192,44 @@ export function snapshot(simMinutes = currentSimMinutes()): PatientSnapshot[] {
       atypical,
       ambient,
       riskFactors,
+      age: p.age,
+      ageBand: band,
+      confidence,
+      completeness,
       vitals: p.arrivalVitals,
     }).total;
 
-    const crossing = findEscalationCrossing(
-      p.arrivalVitals,
-      p.trajectory,
+    const crossing = findEscalationCrossing({
+      arrivalVitals: p.arrivalVitals,
+      trajectory: p.trajectory,
       acuity,
       atypical,
       ambient,
+      age: p.age,
+      ageBand: band,
       riskFactors,
-    );
+      confidence,
+      completeness,
+    });
+
+    // Mandatory re-assessment when a patient has waited longer than their
+    // acuity level safely permits. This is a hard time trigger, independent of
+    // whether their score happens to have drifted upward.
+    const reassessDueAtMinutes = SAFE_WAIT_MINUTES[acuity];
+    const overdueBy = Math.round(waitMinutes - reassessDueAtMinutes);
 
     return {
       ...p,
       currentVitals,
+      ageBand: band,
+      ewsChart: AGE_BAND_CHART[band],
+      adultChartNews: adultChartScore(currentVitals),
+      completeness,
       vitalsAgeMinutes: Math.round(projected.ageMinutes),
       vitalsStale: projected.ageMinutes >= VITALS_STALE_AFTER_MINUTES,
       waitMinutes: Math.round(waitMinutes),
       news,
-      newsBand: newsBand(news),
+      newsBand: ewsBand(news),
       effectiveAcuity: acuity,
       urgency: urgencyBreakdown.total,
       urgencyAtArrival,
@@ -178,6 +237,9 @@ export function snapshot(simMinutes = currentSimMinutes()): PatientSnapshot[] {
       status: escalationStatus(urgencyBreakdown.total),
       escalationCrossedAtMinutes:
         crossing !== null && crossing <= waitMinutes ? crossing : null,
+      reassessDueAtMinutes,
+      reassessOverdue: overdueBy > 0,
+      reassessOverdueByMinutes: Math.max(0, overdueBy),
       rank: 0,
       rankDelta: 0,
     } satisfies PatientSnapshot;
@@ -374,6 +436,36 @@ export function acceptAiScore(patientId: string): void {
     `Override on ${patientId} reverted (ESI ${from} → AI score ESI ${p.ai.acuity_level})`,
     { patientId },
   );
+}
+
+/**
+ * Admit the surge cohort — the brief's 3x volume scenario.
+ *
+ * Deliberately does NOT change any threshold, weight or scoring rule. A
+ * patient's physiology is indifferent to how busy the department is, and
+ * relaxing thresholds under load is how a system begins under-triaging exactly
+ * when the consequences are worst. What surge changes is what the department
+ * can SEE: how many patients are past the wait their acuity safely permits, and
+ * how far demand now exceeds staffed capacity.
+ */
+export async function activateSurge(): Promise<void> {
+  if (store.surgeActive) return;
+  store.surgeActive = true;
+
+  const extra = buildPatients(true).filter((p) =>
+    SURGE_PATIENTS.some((sp) => sp.id === p.id),
+  );
+  store.patients.push(...extra);
+
+  logEvent(
+    "seed",
+    `SURGE: ${extra.length} additional arrivals admitted over ${
+      Math.max(...SURGE_PATIENTS.map((p) => p.arrivalSimMinutes)) -
+      Math.min(...SURGE_PATIENTS.map((p) => p.arrivalSimMinutes))
+    } simulated minutes (roughly 3x the normal arrival rate). No scoring threshold was changed.`,
+  );
+
+  await runScoringSweep();
 }
 
 export function resetStore(): void {

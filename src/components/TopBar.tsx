@@ -81,11 +81,13 @@ export function TopBar({
   busy,
   onClock,
   onReset,
+  onSurge,
 }: {
   state: DashboardState;
   busy: boolean;
   onClock: (body: Record<string, unknown>) => void;
   onReset: () => void;
+  onSurge: () => void;
 }) {
   const scoring = state.scoringInFlight > 0;
   const hours = Math.floor(state.simMinutes / 60);
@@ -196,6 +198,28 @@ export function TopBar({
                 scoring {state.scoredCount}/{state.totalPatients}
               </Pill>
             )}
+            {state.reassessOverdue > 0 && (
+              <Pill
+                tone="red"
+                title="Patients waiting longer than their acuity level safely permits. Mandatory re-assessment is triggered by elapsed time, independent of whether their score has drifted."
+              >
+                <StatusDot tone="red" />
+                {state.reassessOverdue} re-assess overdue
+              </Pill>
+            )}
+            <Button
+              size="sm"
+              tone={state.surgeActive ? "danger" : "default"}
+              disabled={busy || state.surgeActive}
+              onClick={onSurge}
+              title={
+                state.surgeActive
+                  ? "Surge cohort already admitted"
+                  : "Admit 12 further arrivals in ~11 simulated minutes — roughly 3x the normal rate. No scoring threshold changes."
+              }
+            >
+              {state.surgeActive ? "Surge active" : "Simulate 3× surge"}
+            </Button>
             <OllamaChip state={state} />
             <Button
               size="sm"

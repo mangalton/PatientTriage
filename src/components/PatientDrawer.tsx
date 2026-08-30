@@ -13,7 +13,8 @@ import {
 } from "recharts";
 
 import { formatDuration, formatSimTime } from "@/lib/clock";
-import { RISK_FACTOR_WEIGHT, newsContributions, urgencyTrace } from "@/lib/urgency";
+import { RISK_FACTOR_WEIGHT, precautionaryUplift, urgencyTrace } from "@/lib/urgency";
+import { AGE_BAND_LABEL, ewsContributions } from "@/lib/ews";
 import { RISK_FACTOR_LABEL } from "@/lib/types";
 import type { AcuityLevel, PatientSnapshot, Vitals } from "@/lib/types";
 import type { DashboardState } from "@/lib/view";
@@ -243,7 +244,7 @@ export function PatientDrawer({
   const t = CHART;
   const s = STATUS_STYLE[patient.status];
   const b = patient.urgencyBreakdown;
-  const contrib = newsContributions(patient.currentVitals);
+  const contrib = ewsContributions(patient.currentVitals, patient.age);
 
   const trace = useMemo(
     () =>
@@ -257,6 +258,8 @@ export function PatientDrawer({
         Math.max(120, patient.waitMinutes + 60),
         40,
         patient.ai?.risk_factors ?? [],
+        patient.age,
+        patient.ageBand,
       ),
     [patient],
   );
@@ -283,7 +286,7 @@ export function PatientDrawer({
           </div>
           <p className="tnum mt-1 text-caption text-label-2">
             {patient.id} · {patient.age}
-            {patient.sex} · arrived {formatSimTime(patient.arrivalSimMinutes)} · waiting{" "}
+            {patient.sex} · {AGE_BAND_LABEL[patient.ageBand]} · arrived {formatSimTime(patient.arrivalSimMinutes)} · waiting{" "}
             {formatDuration(patient.waitMinutes)} · queue position #{patient.rank}
             {patient.rankDelta > 0 && (
               <span className="ml-1 font-semibold text-sys-red">
@@ -307,6 +310,77 @@ export function PatientDrawer({
           </p>
         </section>
 
+        {/* Record on file ---------------------------------------------- */}
+        <section>
+          <div className="mb-2 flex items-baseline justify-between gap-3">
+            <SectionLabel>Record on file</SectionLabel>
+            <span className="-mt-1 text-caption text-label-2">
+              data completeness{" "}
+              <span
+                className={cx(
+                  "tnum font-semibold",
+                  patient.completeness.score >= 0.8
+                    ? "text-st-stable"
+                    : patient.completeness.score >= 0.5
+                      ? "text-st-watch"
+                      : "text-st-critical",
+                )}
+              >
+                {Math.round(patient.completeness.score * 100)}%
+              </span>
+            </span>
+          </div>
+          {patient.priorRecord ? (
+            <div className="space-y-2 rounded-card bg-elev2 p-4 text-footnote text-label">
+              <p>
+                <span className="text-label-2">Previous visits</span>{" "}
+                <span className="tnum font-medium">
+                  {patient.priorRecord.previousVisits}
+                </span>
+                <span className="ml-2 text-label-3">
+                  · updated{" "}
+                  {Math.round(patient.priorRecord.lastUpdatedMinutesAgo / 1440)} days ago
+                </span>
+              </p>
+              <p>
+                <span className="text-label-2">Conditions</span>{" "}
+                {patient.priorRecord.conditions.join(", ") || "none recorded"}
+              </p>
+              <p>
+                <span className="text-label-2">Medications</span>{" "}
+                {patient.priorRecord.medications.join(", ") || "none recorded"}
+              </p>
+              <p>
+                <span className="text-label-2">Allergies</span>{" "}
+                {patient.priorRecord.allergies.join(", ") || "none recorded"}
+              </p>
+              {patient.priorRecord.carePlan && (
+                <p className="rounded-ctl bg-tint-blue px-3 py-2 text-sys-blue">
+                  <span className="font-semibold">Care plan on file — </span>
+                  {patient.priorRecord.carePlan}
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="rounded-card bg-elev2 p-4">
+              <p className="text-footnote text-label-2">
+                Nothing on file. First presentation at this hospital.
+                {patient.completeness.missing.length > 1 && (
+                  <>
+                    {" "}
+                    Also missing:{" "}
+                    {patient.completeness.missing
+                      .filter((m) => m !== "prior record")
+                      .map((m) => m.replace("vital:", "observation "))
+                      .join(", ")}
+                    .
+                  </>
+                )}
+              </p>
+            </div>
+          )}
+        </section>
+
         {/* Vitals ------------------------------------------------------ */}
         <section>
           <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
@@ -325,9 +399,43 @@ export function PatientDrawer({
                     : "text-label-2",
               )}
             >
-              NEWS {patient.news}
+              {patient.ewsChart} {patient.news}
             </span>
           </div>
+          {patient.ageBand !== "adult" && (
+            <div className="mb-2.5 rounded-ctl bg-tint-indigo px-3 py-2.5">
+              <p className="text-caption font-semibold text-sys-indigo">
+                Scored on the {patient.ewsChart} chart
+              </p>
+              <p className="mt-1 text-footnote leading-[17px] text-label">
+                These same observations score{" "}
+                <span className="tnum font-semibold">{patient.adultChartNews}</span>{" "}
+                on the adult chart and{" "}
+                <span className="tnum font-semibold">{patient.news}</span>{" "}
+                on the age-appropriate one.{" "}
+                {patient.adultChartNews > patient.news
+                  ? "The adult chart over-reads age-normal physiology here — the kind of false alarm that teaches staff to ignore paediatric warnings."
+                  : patient.adultChartNews < patient.news
+                    ? "The adult chart UNDER-reads this patient. A blunted febrile response and a hypertensive baseline mean genuine deterioration can score close to zero on adult thresholds."
+                    : "They agree on this particular set of observations, but the thresholds behind them differ."}
+              </p>
+            </div>
+          )}
+
+          {patient.completeness.zeroHistory && (
+            <div className="mb-2.5 rounded-ctl bg-tint-indigo px-3 py-2.5">
+              <p className="text-caption font-semibold text-sys-indigo">
+                First presentation — no record on file
+              </p>
+              <p className="mt-1 text-footnote leading-[17px] text-label">
+                Nothing is known about this patient beyond what is observed now:
+                no past conditions, no medications, no allergies. Missing history
+                raises this patient&apos;s urgency rather than lowering it —
+                absence of information is not evidence of wellness.
+              </p>
+            </div>
+          )}
+
           {patient.vitalsStale && (
             <div className="mb-2.5 rounded-ctl bg-tint-orange px-3 py-2.5">
               <p className="text-caption font-semibold text-st-escalated">
@@ -499,6 +607,14 @@ export function PatientDrawer({
                 note: b.atypicalBoost ? "flagged by the model" : "not flagged",
               },
               {
+                label: "Precautionary uplift (safety margin)",
+                value: b.precautionaryUplift,
+                note:
+                  b.precautionaryUplift > 0
+                    ? "escalating under uncertainty — see below"
+                    : "confident, complete picture",
+              },
+              {
                 label: "Model risk factors",
                 value: b.riskFactorBoost,
                 note:
@@ -543,6 +659,43 @@ export function PatientDrawer({
               </dd>
             </div>
           </dl>
+
+          {b.precautionaryUplift > 0 && (
+            <div className="mt-3 rounded-ctl bg-tint-orange px-3 py-2.5">
+              <p className="text-caption font-semibold text-st-escalated">
+                Escalated because the system is uncertain (+{b.precautionaryUplift})
+              </p>
+              <ul className="mt-1.5 space-y-0.5">
+                {precautionaryUplift({
+                  acuity: patient.effectiveAcuity,
+                  waitMinutes: patient.waitMinutes,
+                  atypical: patient.ai?.atypical_presentation_flag ?? false,
+                  ambient: patient.ambient !== null,
+                  vitals: patient.currentVitals,
+                  age: patient.age,
+                  ageBand: patient.ageBand,
+                  confidence: patient.ai?.confidence,
+                  completeness: patient.completeness,
+                }).reasons.map((r) => (
+                  <li key={r} className="text-footnote leading-[17px] text-label">
+                    · {r}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-caption2 leading-[15px] text-label-2">
+                Under-triage and over-triage do not cost the same. This term is
+                one-directional by construction: nothing in the model can lower a
+                score because information is missing.
+              </p>
+            </div>
+          )}
+
+          {patient.ai?.missing_information && (
+            <p className="mt-2 text-caption leading-[16px] text-label-2">
+              <span className="font-medium text-label">Model asked for:</span>{" "}
+              {patient.ai.missing_information}
+            </p>
+          )}
 
           <div className="mt-4 h-36">
             <ResponsiveContainer width="100%" height="100%">

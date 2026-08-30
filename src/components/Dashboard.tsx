@@ -151,6 +151,7 @@ export function Dashboard() {
           setSelectedId(null);
           void post("/api/reset");
         }}
+        onSurge={() => void post("/api/surge")}
       />
 
       {error && (

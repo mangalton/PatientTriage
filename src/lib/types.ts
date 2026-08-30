@@ -8,6 +8,57 @@
 export type Sex = "M" | "F";
 
 /**
+ * Physiological age band. Determines which early-warning chart applies —
+ * see src/lib/ews.ts. Adult thresholds are not valid for children and
+ * under-read deterioration in the elderly.
+ */
+export type AgeBand =
+  | "infant"
+  | "toddler"
+  | "child"
+  | "adolescent"
+  | "adult"
+  | "older adult";
+
+/**
+ * What the hospital already knows about this patient before they open their
+ * mouth. Roughly half of arrivals have something on file and half have nothing;
+ * the triage assistant has to behave safely in both cases, and must never treat
+ * "no history recorded" as "no history exists".
+ */
+export interface PriorRecord {
+  /** Prior encounters on file. */
+  previousVisits: number;
+  /** Known conditions, as the record holds them. */
+  conditions: string[];
+  /** Current medications, which are themselves risk signals. */
+  medications: string[];
+  /** Documented allergies. */
+  allergies: string[];
+  /** A personal care plan for a chronic condition, if one exists. */
+  carePlan: string | null;
+  /** Simulated-minutes-ago the record was last updated. */
+  lastUpdatedMinutesAgo: number;
+}
+
+/**
+ * How much of the intake picture is actually present.
+ *
+ * Drives the precautionary uplift: an incomplete picture is a reason to
+ * escalate, never a reason to relax. Missing data is not reassuring data.
+ */
+export interface DataCompleteness {
+  /** 0..1 — proportion of the expected intake fields that are populated. */
+  score: number;
+  /** Human-readable list of what is missing. */
+  missing: string[];
+  hasPriorRecord: boolean;
+  hasFullVitals: boolean;
+  /** True when this is a first presentation with nothing on file. */
+  zeroHistory: boolean;
+}
+
+/**
  * How the patient reached the department.
  *
  * This is an ENCOUNTER fact, not a patient attribute: it says nothing about who
@@ -125,6 +176,8 @@ export interface AiScore {
   /** 1-2 sentences, grounded in the given complaint + vitals. */
   rationale: string;
   atypical_presentation_flag: boolean;
+  /** Vitals or history the model says it needed and did not get. */
+  missing_information?: string;
   /** Optional free text explaining the atypical flag. */
   atypical_reason?: string;
   /** Named time-critical risks, each carrying a fixed weight in the urgency model. */
@@ -172,6 +225,18 @@ export interface Patient {
   age: number;
   sex: Sex;
   arrivalMode: ArrivalMode;
+  /**
+   * What the hospital had on file before this arrival, or null for a
+   * first-time patient. Roughly half the cohort is null, per the brief.
+   */
+  priorRecord: PriorRecord | null;
+  /**
+   * Vitals that could not be obtained at intake — a distressed child who will
+   * not tolerate a cuff, an agitated patient, a queue moving too fast. Listed
+   * here rather than silently defaulted, because a missing observation must
+   * raise caution rather than score zero.
+   */
+  unobtainableVitals: (keyof Vitals)[];
   chiefComplaint: string;
   /** Extra context handed to the model (history, onset, etc.). */
   narrative: string;
@@ -196,6 +261,22 @@ export interface Patient {
 /** Per-patient values recomputed on every read at the current simulated time. */
 export interface PatientSnapshot extends Patient {
   currentVitals: Vitals;
+  /** Which early-warning chart applies to this patient's age. */
+  ageBand: AgeBand;
+  /** Name of the instrument used, for display. */
+  ewsChart: string;
+  /**
+   * What these same observations would have scored on the adult chart. Shown
+   * for non-adults to make the cost of a one-size-fits-all score visible.
+   */
+  adultChartNews: number;
+  completeness: DataCompleteness;
+  /** Minutes this acuity level is allowed to wait before mandatory review. */
+  reassessDueAtMinutes: number;
+  /** True once that interval has elapsed without a re-assessment. */
+  reassessOverdue: boolean;
+  /** How far past the safe interval, in simulated minutes. */
+  reassessOverdueByMinutes: number;
   /** Simulated minutes since these observations were last actually taken. */
   vitalsAgeMinutes: number;
   /** True when nobody has re-measured this patient for a clinically long time. */
@@ -219,6 +300,13 @@ export interface PatientSnapshot extends Patient {
 
 export interface UrgencyBreakdown {
   base: number;
+  /**
+   * Safety margin applied when the system is uncertain — low model confidence,
+   * missing intake data, no prior record, or an age band where deterioration is
+   * known to present late. Deliberately one-directional: it can only ever raise
+   * urgency, because under-triage and over-triage do not cost the same.
+   */
+  precautionaryUplift: number;
   waitPressure: number;
   atypicalBoost: number;
   riskFactorBoost: number;

@@ -30,8 +30,11 @@
  * actually overturn an intake decision. The ablation panel measures this.
  */
 
+import { earlyWarningScore } from "./ews";
 import type {
   AcuityLevel,
+  AgeBand,
+  DataCompleteness,
   EscalationStatus,
   RiskFactor,
   UrgencyBreakdown,
@@ -151,6 +154,51 @@ export const MAX_WAIT_PRESSURE = 55;
 
 /** Ceiling, set above the realistic maximum so nobody piles up on the clamp. */
 export const URGENCY_MAX = 200;
+
+/**
+ * SAFETY-FIRST DESIGN — the precautionary uplift.
+ *
+ * Under-triage and over-triage do not cost the same. Sending a well patient to
+ * be seen early wastes a slot; leaving a deteriorating one in the queue can kill
+ * them. A system optimised for average accuracy will happily trade one for the
+ * other, so this one is deliberately not: wherever the assistant is uncertain,
+ * it adds urgency. The term is one-directional by construction — there is no
+ * path through this code that lowers a score because information is missing.
+ *
+ * Four sources of uncertainty, each with its own visible line in the breakdown:
+ */
+export const UPLIFT = {
+  /** The model told us it was unsure. Scaled by how unsure. */
+  lowConfidence: 14,
+  /** Confidence at or below this is treated as genuinely uncertain. */
+  lowConfidenceThreshold: 0.6,
+  /** First presentation, nothing on file — we are working blind on history. */
+  zeroHistory: 8,
+  /** Observations we could not obtain, per missing vital. */
+  perMissingVital: 5,
+  /**
+   * Children compensate and then crash: a child can hold a normal blood
+   * pressure until they are close to arrest. Infants and toddlers get a
+   * standing margin because "looks stable" is least reliable in them.
+   */
+  paediatricMargin: 10,
+  /** Older adults present atypically and deteriorate faster from a lower reserve. */
+  geriatricMargin: 6,
+} as const;
+
+/**
+ * How long each acuity level may safely wait before a mandatory re-assessment.
+ * Broadly aligned with published ESI/ATS targets. Breaching these is what the
+ * brief calls "monitor patients already in the waiting queue and trigger
+ * re-assessment if wait time exceeds safe thresholds for their severity level".
+ */
+export const SAFE_WAIT_MINUTES: Record<AcuityLevel, number> = {
+  1: 0,
+  2: 10,
+  3: 30,
+  4: 60,
+  5: 120,
+};
 
 export const DEFAULT_WEIGHTS: UrgencyWeights = {
   basePerLevel: BASE_PER_LEVEL,
@@ -359,8 +407,67 @@ export interface UrgencyInput {
   atypical: boolean;
   ambient: boolean;
   vitals: Vitals;
+  /** Age drives which early-warning chart applies. Required — never assume adult. */
+  age: number;
+  ageBand: AgeBand;
   /** Named clinical risks the model attached to this patient. */
   riskFactors?: RiskFactor[];
+  /** 0..1 model confidence. Low confidence raises urgency, never lowers it. */
+  confidence?: number;
+  completeness?: DataCompleteness;
+}
+
+/** The safety margin, itemised so the UI can show exactly why it was applied. */
+export function precautionaryUplift(input: UrgencyInput): {
+  total: number;
+  reasons: string[];
+} {
+  const reasons: string[] = [];
+  let total = 0;
+
+  const confidence = input.confidence ?? 1;
+  if (confidence <= UPLIFT.lowConfidenceThreshold) {
+    // Scaled: 0.6 confidence adds a little, 0.2 adds a lot.
+    const shortfall =
+      (UPLIFT.lowConfidenceThreshold - confidence) / UPLIFT.lowConfidenceThreshold;
+    const pts = Math.round(UPLIFT.lowConfidence * shortfall);
+    if (pts > 0) {
+      total += pts;
+      reasons.push(`model confidence ${(confidence * 100).toFixed(0)}% (+${pts})`);
+    }
+  }
+
+  if (input.completeness?.zeroHistory) {
+    total += UPLIFT.zeroHistory;
+    reasons.push(`first presentation, no record on file (+${UPLIFT.zeroHistory})`);
+  }
+
+  const missingVitals = input.completeness?.hasFullVitals === false
+    ? (input.completeness.missing.filter((m) => m.startsWith("vital:")).length || 1)
+    : 0;
+  if (missingVitals > 0) {
+    const pts = missingVitals * UPLIFT.perMissingVital;
+    total += pts;
+    reasons.push(`${missingVitals} observation(s) unobtainable (+${pts})`);
+  }
+
+  if (
+    input.ageBand === "infant" ||
+    input.ageBand === "toddler" ||
+    input.ageBand === "child"
+  ) {
+    total += UPLIFT.paediatricMargin;
+    reasons.push(
+      `paediatric — compensates then decompensates late (+${UPLIFT.paediatricMargin})`,
+    );
+  } else if (input.ageBand === "older adult") {
+    total += UPLIFT.geriatricMargin;
+    reasons.push(
+      `older adult — atypical presentation, low reserve (+${UPLIFT.geriatricMargin})`,
+    );
+  }
+
+  return { total, reasons };
 }
 
 export function computeUrgency(
@@ -382,11 +489,19 @@ export function computeUrgency(
 
   const atypicalBoost = atypical ? w.atypicalBoost : 0;
   const ambientBoost = ambient ? w.ambientBoost : 0;
-  const physiologyPressure = w.physiologyWeight * newsScore(vitals);
+  const physiologyPressure =
+    w.physiologyWeight * earlyWarningScore(vitals, input.age);
+
+  const uplift = precautionaryUplift(input);
 
   // Everything the score knows about this patient before red flags are applied.
   const withoutRisk =
-    base + waitPressure + atypicalBoost + ambientBoost + physiologyPressure;
+    base +
+    waitPressure +
+    atypicalBoost +
+    ambientBoost +
+    physiologyPressure +
+    uplift.total;
 
   // Only the single strongest risk counts. Summing them would let a verbose
   // model inflate a patient by listing everything it can think of.
@@ -408,6 +523,7 @@ export function computeUrgency(
 
   return {
     base,
+    precautionaryUplift: uplift.total,
     waitPressure: Math.round(waitPressure * 10) / 10,
     atypicalBoost,
     riskFactorBoost,
@@ -442,15 +558,35 @@ const crossingCache = new Map<string, number | null>();
  * a handful of wallboards was a quarter of a million pointless computations a
  * second, all returning the same number.
  */
-export function findEscalationCrossing(
-  arrivalVitals: Vitals,
-  trajectory: VitalTrajectory,
-  acuity: AcuityLevel,
-  atypical: boolean,
-  ambient: boolean,
-  riskFactors: RiskFactor[] = [],
-  horizonMinutes = 480,
-): number | null {
+export interface CrossingInput {
+  arrivalVitals: Vitals;
+  trajectory: VitalTrajectory;
+  acuity: AcuityLevel;
+  atypical: boolean;
+  ambient: boolean;
+  age: number;
+  ageBand: AgeBand;
+  riskFactors?: RiskFactor[];
+  confidence?: number;
+  completeness?: DataCompleteness;
+  horizonMinutes?: number;
+}
+
+export function findEscalationCrossing(input: CrossingInput): number | null {
+  const {
+    arrivalVitals,
+    trajectory,
+    acuity,
+    atypical,
+    ambient,
+    age,
+    ageBand,
+    riskFactors = [],
+    confidence,
+    completeness,
+    horizonMinutes = 480,
+  } = input;
+
   const key = JSON.stringify([
     arrivalVitals,
     trajectory,
@@ -458,6 +594,10 @@ export function findEscalationCrossing(
     atypical,
     ambient,
     [...riskFactors].sort(),
+    age,
+    confidence,
+    completeness?.zeroHistory,
+    completeness?.hasFullVitals,
     horizonMinutes,
   ]);
   const hit = crossingCache.get(key);
@@ -471,6 +611,10 @@ export function findEscalationCrossing(
       atypical,
       ambient,
       riskFactors,
+      age,
+      ageBand,
+      confidence,
+      completeness,
       vitals: projectVitals(arrivalVitals, trajectory, t).vitals,
     }).total;
     if (u >= ESCALATION_THRESHOLD) {
@@ -493,6 +637,8 @@ export function urgencyTrace(
   toMinutes: number,
   steps = 40,
   riskFactors: RiskFactor[] = [],
+  age = 40,
+  ageBand: AgeBand = "adult",
 ): { t: number; urgency: number; news: number }[] {
   const out: { t: number; urgency: number; news: number }[] = [];
   const span = Math.max(1, toMinutes - fromMinutes);
@@ -507,9 +653,11 @@ export function urgencyTrace(
         atypical,
         ambient,
         riskFactors,
+        age,
+        ageBand,
         vitals,
       }).total,
-      news: newsScore(vitals),
+      news: earlyWarningScore(vitals, age),
     });
   }
   return out;

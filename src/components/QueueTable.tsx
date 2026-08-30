@@ -294,6 +294,11 @@ export function QueueTable({
                           <div className="tnum mt-0.5 text-caption text-label-3">
                             {p.id} · {p.age}
                             {p.sex} · {p.arrivalMode.toLowerCase()}
+                            {p.ageBand !== "adult" && (
+                              <span className="ml-1 font-medium text-sys-indigo">
+                                · {p.ageBand}
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -388,6 +393,22 @@ export function QueueTable({
                               title="A nurse override is in force for this patient"
                             >
                               override
+                            </Pill>
+                          )}
+                          {p.reassessOverdue && (
+                            <Pill
+                              tone="red"
+                              title={`Waited ${formatDuration(p.waitMinutes)} — an ESI ${p.effectiveAcuity} patient may safely wait ${formatDuration(p.reassessDueAtMinutes)}. Mandatory re-assessment is ${formatDuration(p.reassessOverdueByMinutes)} overdue.`}
+                            >
+                              re-assess {formatDuration(p.reassessOverdueByMinutes)} overdue
+                            </Pill>
+                          )}
+                          {p.completeness.zeroHistory && (
+                            <Pill
+                              tone="indigo"
+                              title="First presentation — nothing on file. Missing history raises urgency; it is never treated as reassurance."
+                            >
+                              no record
                             </Pill>
                           )}
                           {p.vitalsStale && (

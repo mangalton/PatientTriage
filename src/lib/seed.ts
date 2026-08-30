@@ -37,6 +37,7 @@ import type {
   Bed,
   ArrivalMode,
   Patient,
+  PriorRecord,
   Sex,
   VitalTrajectory,
   Vitals,
@@ -71,7 +72,33 @@ export interface SeedPatient {
   ambient: AmbientFlag | null;
   seededOverride: SeededOverride | null;
   teachingNote: string | null;
+  /**
+   * What the hospital already had on file. Omitted = first presentation with
+   * nothing on record, which the brief expects for roughly half of arrivals.
+   */
+  priorRecord?: PriorRecord | null;
+  /** Observations that could not be obtained at intake. */
+  unobtainableVitals?: (keyof Vitals)[];
 }
+
+/** Shorthand for building a prior record without repeating the shape. */
+const rec = (
+  previousVisits: number,
+  conditions: string[],
+  medications: string[],
+  opts: {
+    allergies?: string[];
+    carePlan?: string | null;
+    lastUpdatedMinutesAgo?: number;
+  } = {},
+): PriorRecord => ({
+  previousVisits,
+  conditions,
+  medications,
+  allergies: opts.allergies ?? [],
+  carePlan: opts.carePlan ?? null,
+  lastUpdatedMinutesAgo: opts.lastUpdatedMinutesAgo ?? 60 * 24 * 90,
+});
 
 const v = (
   hr: number,
@@ -85,6 +112,7 @@ const v = (
 export const SEED_PATIENTS: SeedPatient[] = [
   {
     id: "P-001",
+    priorRecord: rec(2, ["Migraine"], ["Combined oral contraceptive"], { lastUpdatedMinutesAgo: 60 * 24 * 400 }),
     name: "Das, R.",
     age: 34,
     sex: "F",
@@ -111,6 +139,7 @@ export const SEED_PATIENTS: SeedPatient[] = [
   },
   {
     id: "P-002",
+    priorRecord: rec(6, ["Atrial fibrillation", "Osteoarthritis"], ["Apixaban", "Bisoprolol"], { allergies: ["Penicillin"], lastUpdatedMinutesAgo: 60 * 24 * 30 }),
     name: "Deshmukh, V.",
     age: 71,
     sex: "M",
@@ -143,6 +172,7 @@ export const SEED_PATIENTS: SeedPatient[] = [
   },
   {
     id: "P-004",
+    priorRecord: rec(3, ["Type 2 diabetes"], ["Metformin"], { lastUpdatedMinutesAgo: 60 * 24 * 45 }),
     name: "Bhattacharya, S.",
     age: 55,
     sex: "F",
@@ -173,6 +203,7 @@ export const SEED_PATIENTS: SeedPatient[] = [
   },
   {
     id: "P-005",
+    priorRecord: rec(4, ["COPD"], ["Salbutamol inhaler", "Tiotropium"], { lastUpdatedMinutesAgo: 60 * 24 * 120 }),
     name: "Fernandes, S.",
     age: 63,
     sex: "M",
@@ -256,6 +287,7 @@ export const SEED_PATIENTS: SeedPatient[] = [
   },
   {
     id: "P-009",
+    priorRecord: rec(1, ["Hypothyroidism"], ["Levothyroxine"], { lastUpdatedMinutesAgo: 60 * 24 * 200 }),
     name: "Iyer, R.",
     age: 68,
     sex: "F",
@@ -280,6 +312,7 @@ export const SEED_PATIENTS: SeedPatient[] = [
   },
   {
     id: "P-010",
+    priorRecord: rec(9, ["Hypertension", "Benign prostatic hyperplasia"], ["Amlodipine", "Tamsulosin"], { lastUpdatedMinutesAgo: 60 * 24 * 14 }),
     name: "Agarwal, J.",
     age: 79,
     sex: "M",
@@ -323,6 +356,8 @@ export const SEED_PATIENTS: SeedPatient[] = [
   },
   {
     id: "P-012",
+    unobtainableVitals: ["sbp", "dbp"],
+    priorRecord: rec(14, ["Sickle cell disease (HbSS)"], ["Hydroxycarbamide", "Folic acid"], { carePlan: "Individualised sickle crisis analgesia plan: IV morphine within 30 min of arrival, do not delay for investigations.", lastUpdatedMinutesAgo: 60 * 24 * 7 }),
     name: "Ghosh, M.",
     age: 26,
     sex: "M",
@@ -390,6 +425,7 @@ export const SEED_PATIENTS: SeedPatient[] = [
   },
   {
     id: "P-015",
+    priorRecord: rec(2, ["Hypertension"], ["Ramipril"], { lastUpdatedMinutesAgo: 60 * 24 * 300 }),
     name: "Banerjee, A.",
     age: 60,
     sex: "F",
@@ -426,6 +462,7 @@ export const SEED_PATIENTS: SeedPatient[] = [
   },
   {
     id: "P-017",
+    priorRecord: rec(1, ["Type 2 diabetes"], ["Metformin"], { lastUpdatedMinutesAgo: 60 * 24 * 500 }),
     name: "Mehra, M.",
     age: 58,
     sex: "M",
@@ -474,6 +511,161 @@ export const SEED_PATIENTS: SeedPatient[] = [
     seededOverride: null,
     teachingNote: null,
   },
+  {
+    id: "P-019",
+    name: "Rao, A.",
+    age: 3,
+    sex: "F",
+    arrivalMode: "Walk-in",
+    chiefComplaint: "Fever and not herself since yesterday",
+    narrative:
+      "Brought by a parent. Fever since yesterday evening, now drowsy and difficult to rouse between naps. Took a few sips of juice this morning and has had one wet nappy in twelve hours. No rash reported. First time at this hospital — nothing on file.",
+    arrivalVitals: v(172, 74, 42, 44, 95, 38.8),
+    trajectory: {
+      hr: 0.09,
+      sbp: -0.05,
+      noise: { hr: 6, rr: 2.5, sbp: 3, spo2: 0.6 },
+    },
+    arrivalSimMinutes: 66,
+    ambient: null,
+    seededOverride: null,
+    // ZERO HISTORY: no prior record at all.
+    teachingNote:
+      "PAEDIATRIC + ZERO-HISTORY CASE. A systolic of 74 is normal-looking on an adult chart and is decompensated shock in a three-year-old — children maintain blood pressure by vasoconstricting until they are close to arrest, so by the time an adult-calibrated score notices, it is very late. Her tachycardia and tachypnoea would ALSO be scored as alarming in an adult, which is the mirror-image error. Compare the age-appropriate score against the adult-chart figure in her chart. She is also a first presentation with nothing on file, so the precautionary uplift applies twice over.",
+  },
+  {
+    id: "P-020",
+    name: "Khan, I.",
+    age: 7,
+    sex: "M",
+    arrivalMode: "Ambulance",
+    priorRecord: rec(5, ["Asthma"], ["Salbutamol inhaler", "Beclometasone"], {
+      allergies: ["Ibuprofen"],
+      carePlan:
+        "Asthma action plan: 10 puffs salbutamol via spacer, escalate to nebuliser if no response in 20 min.",
+      lastUpdatedMinutesAgo: 60 * 24 * 21,
+    }),
+    chiefComplaint: "Wheeze and increased work of breathing",
+    narrative:
+      "Known asthmatic, brought in by ambulance after salbutamol at home gave only partial relief. Speaking in short phrases. Has a documented asthma action plan on file from his last review.",
+    arrivalVitals: v(138, 102, 62, 34, 94, 37.1),
+    trajectory: {
+      // Responds to treatment given en route, then plateaus.
+      rr: 0.08,
+      inflectionMinutes: 35,
+      after: { rr: -0.14, spo2: 0.02, hr: -0.2 },
+      noise: { hr: 5, rr: 2, spo2: 0.6 },
+    },
+    arrivalSimMinutes: 74,
+    ambient: null,
+    seededOverride: null,
+    teachingNote:
+      "RICH-HISTORY COUNTERPART to P-019. Five prior visits, a documented asthma action plan and a recorded ibuprofen allergy — the same intake, with a completely different amount known. His data-completeness score is high and he carries no precautionary uplift for missing information; the three-year-old beside him carries the maximum.",
+  },
+  {
+    id: "P-021",
+    name: "Nambiar, S.",
+    age: 82,
+    sex: "F",
+    arrivalMode: "Referred",
+    chiefComplaint: "Off legs, not eating, sent in by GP",
+    narrative:
+      "Two days of reduced mobility and poor oral intake. No cough, no dysuria, no localising symptoms offered. Lives alone. Daughter says she is 'just not right'. Registered at a different hospital until this year, so nothing on file here.",
+    arrivalVitals: v(92, 118, 68, 20, 96, 37.6),
+    trajectory: {
+      hr: 0.06,
+      sbp: -0.08,
+      temp: 0.003,
+      noise: { hr: 3, rr: 1, sbp: 4 },
+    },
+    arrivalSimMinutes: 80,
+    ambient: null,
+    seededOverride: null,
+    teachingNote:
+      "GERIATRIC CASE, and the reason older adults get their own chart. Every one of these observations scores ZERO on the adult chart: 37.6 is not a fever, 118 systolic is not hypotension, 92 is not tachycardia. In an 82-year-old with a blunted febrile response and a likely hypertensive baseline, this is an early sepsis picture. 'Off legs' with no localising symptoms is one of the most under-triaged presentations in emergency medicine. She also has no record on file.",
+  },
+];
+
+
+/**
+ * SURGE COHORT — the brief's "3x normal volume" scenario.
+ *
+ * Twelve additional arrivals compressed into a short window, on top of the
+ * eighteen already waiting. Normal arrival rate in this seed is roughly one
+ * patient every five simulated minutes; these land at one every ninety seconds.
+ *
+ * The point of the exercise is NOT that the scoring changes under load — it
+ * must not, because a patient's physiology does not care how busy the
+ * department is, and quietly relaxing thresholds during a surge is precisely
+ * how a system starts under-triaging exactly when it matters most. What changes
+ * is what becomes *visible*: the number of patients past their safe
+ * re-assessment window, and the gap between demand and staffed capacity.
+ */
+export const SURGE_PATIENTS: SeedPatient[] = [
+  { id: "S-01", name: "Bhosale, R.", age: 34, sex: "M", arrivalMode: "Ambulance",
+    chiefComplaint: "Road traffic collision, chest wall pain",
+    narrative: "Restrained driver, side impact at moderate speed. Seatbelt bruising across the chest. Walking at scene.",
+    arrivalVitals: v(104, 128, 78, 22, 96, 36.8),
+    trajectory: { noise: { hr: 4, rr: 1.3, sbp: 5 } }, arrivalSimMinutes: 96,
+    ambient: null, seededOverride: null, teachingNote: null },
+  { id: "S-02", name: "Menon, P.", age: 29, sex: "F", arrivalMode: "Ambulance",
+    chiefComplaint: "Road traffic collision, neck pain",
+    narrative: "Front seat passenger in the same collision. Midline cervical tenderness. Fully alert.",
+    arrivalVitals: v(96, 122, 74, 18, 98, 36.6),
+    trajectory: { noise: { hr: 3, rr: 1, sbp: 4 } }, arrivalSimMinutes: 97,
+    ambient: null, seededOverride: null, teachingNote: null },
+  { id: "S-03", name: "Kale, S.", age: 8, sex: "M", arrivalMode: "Ambulance",
+    priorRecord: rec(1, [], [], { lastUpdatedMinutesAgo: 60 * 24 * 600 }),
+    chiefComplaint: "Road traffic collision, rear seat, abdominal pain",
+    narrative: "Rear seat, lap belt only. Complaining of abdominal pain across the belt line. Quiet and clingy to parent.",
+    arrivalVitals: v(128, 94, 58, 26, 97, 36.9),
+    trajectory: { hr: 0.09, sbp: -0.06, noise: { hr: 5, rr: 1.6, sbp: 4 } },
+    arrivalSimMinutes: 98, ambient: null, seededOverride: null,
+    teachingNote: "Lap-belt abdominal pain in a child with a rising heart rate and falling pressure is a hollow viscus or mesenteric injury until proven otherwise. Under surge this is exactly the patient who gets lost among the walking wounded." },
+  { id: "S-04", name: "Bose, A.", age: 45, sex: "F", arrivalMode: "Walk-in",
+    chiefComplaint: "Hand laceration at work", narrative: "Deep laceration to the palm from sheet metal an hour ago. Bleeding controlled with pressure.",
+    arrivalVitals: v(88, 130, 80, 16, 98, 36.7), trajectory: { noise: { hr: 3, rr: 1, sbp: 4 } },
+    arrivalSimMinutes: 99, ambient: null, seededOverride: null, teachingNote: null },
+  { id: "S-05", name: "Pawar, D.", age: 61, sex: "M", arrivalMode: "Walk-in",
+    chiefComplaint: "Dizziness on standing", narrative: "Two days of light-headedness on standing. Started a new blood pressure tablet last week.",
+    arrivalVitals: v(72, 104, 62, 16, 97, 36.5), trajectory: { noise: { hr: 3, sbp: 5, rr: 1 } },
+    arrivalSimMinutes: 100, ambient: null, seededOverride: null, teachingNote: null },
+  { id: "S-06", name: "Nayak, L.", age: 24, sex: "F", arrivalMode: "Walk-in",
+    chiefComplaint: "Ankle injury", narrative: "Twisted ankle on a kerb. Weight bearing with discomfort.",
+    arrivalVitals: v(80, 116, 70, 15, 99, 36.6), trajectory: { noise: { hr: 3, rr: 1, sbp: 4 } },
+    arrivalSimMinutes: 101, ambient: null, seededOverride: null, teachingNote: null },
+  { id: "S-07", name: "Shetty, V.", age: 70, sex: "M", arrivalMode: "Referred",
+    priorRecord: rec(8, ["Ischaemic heart disease", "Type 2 diabetes"], ["Aspirin", "Atorvastatin", "Metformin"], { lastUpdatedMinutesAgo: 60 * 24 * 20 }),
+    chiefComplaint: "Chest pain on exertion, GP referral",
+    narrative: "Two episodes of central chest tightness on walking today, each settling with rest. Known ischaemic heart disease.",
+    arrivalVitals: v(90, 138, 82, 18, 96, 36.7),
+    trajectory: { hr: 0.05, noise: { hr: 4, rr: 1, sbp: 5 } }, arrivalSimMinutes: 102,
+    ambient: null, seededOverride: null, teachingNote: null },
+  { id: "S-08", name: "Barman, T.", age: 19, sex: "M", arrivalMode: "Walk-in",
+    chiefComplaint: "Sore throat", narrative: "Three days of sore throat. Eating and drinking normally.",
+    arrivalVitals: v(84, 120, 72, 16, 99, 37.4), trajectory: { noise: { hr: 3, rr: 1, sbp: 4 } },
+    arrivalSimMinutes: 103, ambient: null, seededOverride: null, teachingNote: null },
+  { id: "S-09", name: "Chatterjee, M.", age: 53, sex: "F", arrivalMode: "Walk-in",
+    chiefComplaint: "Back pain after lifting", narrative: "Lifted a heavy box this morning. Lumbar pain, no radiation, no red flags.",
+    arrivalVitals: v(86, 134, 84, 17, 98, 36.8), trajectory: { noise: { hr: 3, rr: 1, sbp: 4 } },
+    arrivalSimMinutes: 104, ambient: null, seededOverride: null, teachingNote: null },
+  { id: "S-10", name: "Reddy, K.", age: 2, sex: "F", arrivalMode: "Walk-in",
+    chiefComplaint: "Cough and mild fever", narrative: "Two days of cough, feeding normally, playful in the waiting room. Parent worried about the cough.",
+    arrivalVitals: v(132, 96, 58, 32, 98, 37.8), trajectory: { noise: { hr: 6, rr: 2.5, sbp: 3 } },
+    arrivalSimMinutes: 105, ambient: null, seededOverride: null,
+    teachingNote: "A WELL toddler. Her heart rate and respiratory rate would score three points each on an adult chart. On the paediatric chart she scores near zero, which is correct — over-triaging her is how a department teaches itself to ignore paediatric alarms." },
+  { id: "S-11", name: "Joshi, N.", age: 37, sex: "M", arrivalMode: "Walk-in",
+    chiefComplaint: "Eye pain after grinding metal", narrative: "Foreign body sensation in the right eye since grinding without goggles two hours ago.",
+    arrivalVitals: v(82, 126, 78, 16, 98, 36.6), trajectory: { noise: { hr: 3, rr: 1, sbp: 4 } },
+    arrivalSimMinutes: 106, ambient: null, seededOverride: null, teachingNote: null },
+  { id: "S-12", name: "Dutta, R.", age: 88, sex: "F", arrivalMode: "Ambulance",
+    chiefComplaint: "Found on floor at home, unclear duration",
+    narrative: "Carer found her on the floor. Unclear how long she had been there. Confused, but daughter says she is normally sharp.",
+    arrivalVitals: v(94, 122, 70, 21, 95, 37.4),
+    trajectory: { hr: 0.07, sbp: -0.1, noise: { hr: 3, rr: 1.2, sbp: 4 } },
+    arrivalSimMinutes: 107, ambient: { reason: "No response to check-in prompt; brought through on a trolley", confidence: 0.79 },
+    seededOverride: null,
+    teachingNote: "Long lie in an 88-year-old with new confusion. On the adult chart almost nothing here scores. On the geriatric chart the low-grade temperature and the relative hypotension both count, which is the difference between a four-hour wait and a sepsis screen." },
 ];
 
 /** The patient the "silent deterioration" demo button jumps to. */
@@ -481,8 +673,11 @@ export const STORY_DETERIORATION_PATIENT_ID = "P-017";
 /** The arrival route the equity story concerns. */
 export const STORY_EQUITY_GROUP: ArrivalMode = "Walk-in";
 
-export function buildPatients(): Patient[] {
-  return SEED_PATIENTS.map((s) => ({
+export function buildPatients(includeSurge = false): Patient[] {
+  const roster = includeSurge
+    ? [...SEED_PATIENTS, ...SURGE_PATIENTS]
+    : SEED_PATIENTS;
+  return roster.map((s) => ({
     id: s.id,
     name: s.name,
     age: s.age,
@@ -493,6 +688,8 @@ export function buildPatients(): Patient[] {
     arrivalVitals: { ...s.arrivalVitals },
     trajectory: { ...s.trajectory },
     arrivalSimMinutes: s.arrivalSimMinutes,
+    priorRecord: s.priorRecord ?? null,
+    unobtainableVitals: s.unobtainableVitals ?? [],
     ai: null,
     scoring: false,
     scoringError: null,

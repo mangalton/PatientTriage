@@ -104,6 +104,7 @@ function rowsMoved(a: string[], b: string[]): number {
 // ---------------------------------------------------------------------------
 
 type Term =
+  | "precautionaryUplift"
   | "waitPressure"
   | "atypicalBoost"
   | "riskFactorBoost"
@@ -122,6 +123,10 @@ function score(
       atypical: p.ai?.atypical_presentation_flag ?? false,
       ambient: p.ambient !== null,
       riskFactors: p.ai?.risk_factors ?? [],
+      age: p.age,
+      ageBand: p.ageBand,
+      confidence: p.ai?.confidence,
+      completeness: p.completeness,
       vitals: p.currentVitals,
     },
     weights,
@@ -144,6 +149,12 @@ function orderBy(
 }
 
 const ABLATIONS: { key: Term; label: string; detail: string }[] = [
+  {
+    key: "precautionaryUplift",
+    label: "Precautionary uplift",
+    detail:
+      "The safety margin applied under uncertainty — low model confidence, missing data, no prior record, or a paediatric/geriatric age band. Removing it shows how many patients are being protected by caution rather than by evidence.",
+  },
   {
     key: "waitPressure",
     label: "Time decay",

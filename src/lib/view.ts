@@ -51,6 +51,11 @@ export interface DashboardState {
   surge: SurgeReport;
   routing: RoutingResult;
   ollama: OllamaStatus | null;
+  surgeActive: boolean;
+  /** Patients waiting longer than their acuity level safely permits. */
+  reassessOverdue: number;
+  /** Arrivals in the last simulated hour, versus staffed capacity. */
+  arrivalsLastHour: number;
   scoringInFlight: number;
   scoredCount: number;
   totalPatients: number;
@@ -103,6 +108,11 @@ export async function buildDashboardState(): Promise<DashboardState> {
     surge: buildSurgeReport(store.history, simMinutes),
     routing: routePatients(patients, store.beds),
     ollama: await getOllamaStatus(),
+    surgeActive: store.surgeActive,
+    reassessOverdue: patients.filter((p) => p.reassessOverdue).length,
+    arrivalsLastHour: patients.filter(
+      (p) => simMinutes - p.arrivalSimMinutes <= 60,
+    ).length,
     scoringInFlight: store.patients.filter((p) => p.scoring).length,
     scoredCount: store.patients.filter((p) => p.ai).length,
     totalPatients: store.patients.length,

@@ -20,7 +20,8 @@ import {
   ollamaChat,
   type OllamaChatMessage,
 } from "./ollama";
-import { newsScore } from "./urgency";
+import { earlyWarningScore } from "./ews";
+import { AGE_BAND_LABEL, ageBandFor } from "./ews";
 import { RISK_FACTORS } from "./types";
 import type { AcuityLevel, AiScore, Patient, RiskFactor } from "./types";
 
@@ -29,6 +30,8 @@ import type { AcuityLevel, AiScore, Patient, RiskFactor } from "./types";
 // ---------------------------------------------------------------------------
 
 const SYSTEM_PROMPT = `You are a triage decision-support model for an emergency department SIMULATION. You never treat anyone; you produce a structured assessment that a human nurse reviews and may override.
+
+AGE IS NOT A DETAIL. Vital sign norms differ enormously by age. A heart rate of 150 is peri-arrest in an adult and normal in an infant; a systolic of 80 is survivable in a child and shock in an adult; a temperature of 37.6 is nothing in a 30-year-old and a serious sepsis signal in an 85-year-old with a blunted febrile response. Judge the observations against what is normal FOR THIS PATIENT'S AGE, which is stated for you.
 
 Assign an ESI-style acuity level from 1 to 5:
 1 = requires immediate life-saving intervention
@@ -49,7 +52,8 @@ Rules you must follow:
     sepsis             - infection plus physiological disturbance
     haemorrhage        - active or concealed bleeding, or anticoagulation with injury
   These drive time-criticality directly, so do not pad the list. Choose only what the case supports.
-- confidence is your own certainty, 0 to 1. Use a genuinely low number when the presentation is ambiguous.
+- confidence is your own certainty, 0 to 1. Use a genuinely LOW number when the presentation is ambiguous, when the history is thin, or when you would want information you have not been given. Under-confidence is safe here: the system escalates patients it is unsure about, so an honest low number protects the patient. Do not inflate it.
+- missing_information: name the single piece of history or observation whose absence most limits your assessment, or "" if you have what you need.
 - rationale must be 1 to 2 sentences, no more.
 
 Reply with a single JSON object and nothing else.`;
@@ -63,6 +67,7 @@ export const SCORE_SCHEMA = {
     rationale: { type: "string" },
     atypical_presentation_flag: { type: "boolean" },
     atypical_reason: { type: "string" },
+    missing_information: { type: "string" },
     risk_factors: {
       type: "array",
       items: {
@@ -117,6 +122,7 @@ export interface ParsedScore {
   rationale: string;
   atypical_presentation_flag: boolean;
   atypical_reason?: string;
+  missing_information?: string;
   risk_factors: RiskFactor[];
 }
 
@@ -143,6 +149,7 @@ export function validateScore(raw: unknown): ParsedScore {
   if (confidence > 1 && confidence <= 100) confidence /= 100;
   confidence = Math.min(1, Math.max(0, confidence));
 
+  const missingInfo = String(o.missing_information ?? "").trim();
   const rationale = String(o.rationale ?? o.reason ?? "").trim();
   if (!rationale) throw new Error("rationale was empty");
 
@@ -171,6 +178,7 @@ export function validateScore(raw: unknown): ParsedScore {
     rationale: rationale.slice(0, 400),
     atypical_presentation_flag: atypical,
     atypical_reason: atypicalReason ? atypicalReason.slice(0, 300) : undefined,
+    missing_information: missingInfo ? missingInfo.slice(0, 200) : undefined,
     risk_factors: riskFactors.length ? riskFactors : ["none"],
   };
 }
@@ -195,7 +203,7 @@ const ATYPICAL_PATTERNS: { re: RegExp; why: string; factor: RiskFactor }[] = [
  * obvious in the UI that no model was involved.
  */
 export function heuristicScore(p: Patient): ParsedScore {
-  const news = newsScore(p.arrivalVitals);
+  const news = earlyWarningScore(p.arrivalVitals, p.age);
   const text = `${p.chiefComplaint} ${p.narrative}`;
 
   let level: AcuityLevel;

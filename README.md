@@ -47,6 +47,121 @@ gaps.
 
 ---
 
+## How this maps to the brief
+
+| Requirement | Where |
+|---|---|
+| Triage scoring on 15–20 simulated records | 21 patients, 33 under surge — [`src/lib/seed.ts`](src/lib/seed.ts) |
+| At least one ambiguous presentation | P-017 Mehra (indigestion → MI), P-021 Nambiar ("off legs") |
+| At least one paediatric / geriatric case | 2 paediatric (3y, 7y), 4 geriatric (68–82y) |
+| At least one zero-history patient | 11 of 21 have no record on file (~52%, per the brief's "roughly half") |
+| Behaviour under a 3× surge | **Simulate 3× surge** button — 12 arrivals in ~11 simulated minutes |
+| Uncertainty surfaced explicitly | Confidence on every score, plus the precautionary uplift it drives |
+| A clinician override, and what is logged | Override flow in the patient drawer; full audit trail tab |
+| Bias toward escalation under uncertainty | [Safety-first design](#safety-first-design-the-precautionary-uplift) — one-directional by construction |
+| Age-specific vital thresholds | [`src/lib/ews.ts`](src/lib/ews.ts) — six age bands, not one adult chart |
+| Stated regulatory jurisdiction | [Regulatory position](#regulatory-position-and-data-protection) — India DPDP Act 2023 |
+
+### Solutioning areas
+
+| Area | Where |
+|---|---|
+| Data strategy under inconsistent completeness | [Module 1](#module-1--synthetic-patient-generator-srclibseedts) + the data-completeness score driving the uplift |
+| Decision model + representing uncertainty | Hybrid: LLM at intake, deterministic arithmetic continuously — [Module 2a/2b](#module-2a--score-srclibscorerts). Uncertainty is a first-class term, not a display field |
+| Workflow design, surge vs quiet | [Behaviour under surge](#behaviour-under-surge) |
+| Safety-first / fail-safe defaults | [Safety-first design](#safety-first-design-the-precautionary-uplift) |
+| Adoption & change management | [Adoption and change management](#adoption-and-change-management) |
+| Patient data protection | [Regulatory position](#regulatory-position-and-data-protection) |
+| Scalability across hospital size, specialty, maturity | [Flexing across hospitals](#flexing-across-hospitals) + [Scalability](#scalability) |
+| Integration with existing systems | [Integration](#integration-with-existing-systems) — **staff rosters are a stated gap** |
+
+### Real-world complexities
+
+| Complexity | Addressed by |
+|---|---|
+| Ambiguous / under-reported symptoms | Atypical-presentation flag + named risk factors read from the narrative |
+| Age-varying vital thresholds | [`ews.ts`](src/lib/ews.ts) — six charts. **This was the largest gap in the first version** |
+| Variable data availability at intake | `PriorRecord` on ~half the cohort; completeness score; unobtainable vitals |
+| Explainable in seconds, under load | Full term-by-term decomposition in the drawer; severity rail readable peripherally |
+| Asymmetric cost of under- vs over-triage | Precautionary uplift, one-directional by construction |
+| Hospitals differ in scale and specialty | [Flexing across hospitals](#flexing-across-hospitals) |
+| Accountability, override, audit trail | Override flow + full audit tab + [regulatory mapping](#regulatory-position-and-data-protection) |
+| Integration is rarely simple | Three deployment tiers; narrow seams |
+
+---
+
+## Solution architecture
+
+```
+  Browser (one page, polls 1 Hz)
+      │
+      │  GET  /api/state          full derived snapshot
+      │  POST /api/clock          simulated-time control
+      │  POST /api/override       nurse override + reason
+      │  POST /api/surge          admit the 3× cohort
+      │  POST /api/score /reset
+      ▼
+  Next.js API routes  ── server-only, nothing clinical runs in the browser
+      │
+      ├── store.ts      in-memory facts: arrivals, model outputs, overrides
+      │                 derives every time-dependent value on read
+      │
+      ├── scorer.ts ──► Ollama on 127.0.0.1:11434   ONE call per patient
+      │                 at intake, never per refresh
+      │                 └── falls back to a rule-based scorer if unreachable
+      │
+      ├── ews.ts        age-stratified early-warning score  (deterministic)
+      ├── urgency.ts    time-decay + precautionary uplift    (deterministic)
+      ├── equity.ts     override audit + FDR correction      (deterministic)
+      └── analysis.ts   ablation + sensitivity self-evaluation
+```
+
+**The load-bearing decision is where the model sits.** The LLM is called **once per
+patient, at intake**. Everything that runs continuously — re-scoring, ranking,
+early-warning, re-assessment triggers — is deterministic arithmetic over five
+vitals. Expensive inference is in the rare path; the hot path is a few
+floating-point operations per patient per tick. That is what makes the design
+scale to a 500-visit-a-day department, and it is also what makes it auditable:
+the number that moves someone up the queue can always be decomposed and shown to
+the nurse it is arguing with.
+
+**Separation of facts from derivations.** The store holds only what happened —
+who arrived, what the model said, what a nurse did. Current vitals, early-warning
+score, urgency, rank, and re-assessment status are all recomputed on read at the
+current simulated minute. Swapping the in-memory store for Postgres therefore
+means persisting the facts only; the derivation layer moves unchanged.
+
+---
+
+## Dependencies
+
+**Runtime prerequisites**
+
+| | Version | Why |
+|---|---|---|
+| Node.js | ≥ 18.17 | Next.js 15 requirement |
+| Ollama | ≥ 0.5 | Local inference. 0.5+ needed for JSON-Schema-constrained decoding |
+| A pulled model | `llama3.1` (~4.7 GB) | Any instruction-following local model works |
+
+**Application dependencies** — four, deliberately
+
+| Package | Version | Why this one |
+|---|---|---|
+| `next` | 15.1.6 | App Router gives frontend and server-only API routes in one deployable unit |
+| `react` / `react-dom` | 19.0.0 | Required by Next 15 |
+| `recharts` | 2.15.1 | Charts. Composable SVG, no canvas, works server-rendered |
+| `tailwindcss` | 3.4.17 | Styling. Kept as a design-token system, not ad-hoc classes |
+
+**No HTTP client, no ORM, no state library, no component kit.** Ollama is reached
+with `fetch`; state is a module-level object; the design system is ~400 lines in
+`ui.tsx`. **There is no `@anthropic-ai/sdk`, no `openai`, and no cloud SDK of any
+kind** — the only network call the application makes is to `127.0.0.1:11434`.
+
+**Dev dependencies:** `typescript`, `vitest`, `@types/*`, `postcss`, `autoprefixer`.
+
+
+---
+
 ## Quick start
 
 **Prerequisites:** Node.js 18.17+ and [Ollama](https://ollama.com/download).
@@ -64,7 +179,7 @@ npm run dev
 Open **http://localhost:3000**. No `.env` file is required.
 
 The dashboard is usable immediately; acuity scores stream in over the following
-30–90 seconds as the local model works through the 18-patient cohort. Watch the
+40–110 seconds as the local model works through the 21-patient cohort. Watch the
 progress chip in the header.
 
 **If Ollama is not running**, the app still works. It degrades to a transparent
@@ -161,8 +276,16 @@ computation over the cohort.
 
 ### Module 1 — Synthetic patient generator ([`src/lib/seed.ts`](src/lib/seed.ts))
 
-No AI. 18 hand-authored synthetic cases: age, sex, arrival route, chief
-complaint, narrative history, five vitals, and an arrival time. Several are
+No AI. **21 hand-authored synthetic cases** (33 under surge): age, sex, arrival
+route, chief complaint, narrative history, five vitals, an arrival time, and —
+for roughly half — a prior hospital record with conditions, medications,
+allergies and sometimes a care plan. The other half are first presentations with
+nothing on file, which is the split the brief assumes and which the precautionary
+uplift is built to handle.
+
+The cohort deliberately spans six age bands, because a single adult chart across
+all of them is a named safety risk — see
+[Age-stratified thresholds](#age-stratified-thresholds). Several are
 "textbook" cases where a mild-sounding complaint masks a time-critical condition —
 atypical ACS presenting as indigestion, PE presenting as anxiety, sepsis presenting
 as gastritis, SAH presenting as migraine.
@@ -340,6 +463,107 @@ room.
 
 ---
 
+## Safety-first design: the precautionary uplift
+
+**Under-triage and over-triage do not cost the same.** Seeing a well patient
+early wastes a slot; leaving a deteriorating one in the queue can kill them. A
+system optimised for average accuracy will happily trade one for the other, so
+this one is deliberately not.
+
+Wherever the assistant is uncertain, it **adds** urgency. The term is
+one-directional by construction — there is no path through the code that lowers
+a score because information is missing — and there is a unit test that sweeps
+every combination of uncertainty and asserts the contribution is never negative.
+
+| Source of uncertainty | Effect | Reasoning |
+|---|---|---|
+| Model confidence ≤ 0.6 | up to **+14**, scaled by how unsure | The model is told explicitly that honest low confidence protects the patient, so it should not inflate the number |
+| First presentation, nothing on file | **+8** | Absence of history is absence of information, never evidence of wellness |
+| Observation could not be obtained | **+5** each | A missing vital must not score zero |
+| Paediatric age band | **+10** | Children compensate and then crash — "looks stable" is least reliable in them |
+| Older adult | **+6** | Atypical presentation, lower physiological reserve |
+
+Every applied margin is itemised in the patient drawer with its reason, so a
+nurse can see the system is being cautious rather than confident.
+
+### Mandatory re-assessment on elapsed time
+
+Independently of whether a score has drifted, a patient triggers mandatory
+re-assessment once they have waited longer than their acuity level safely
+permits — ESI-2 at 10 minutes, ESI-3 at 30, ESI-4 at 60, ESI-5 at 120. This is a
+hard time trigger, not a score threshold, and it is what stops a stable-looking
+patient being silently parked. The count is on the header and on every affected
+row.
+
+### Age-stratified thresholds
+
+NEWS2 is validated for adults aged 16+ and explicitly not for children. Applying
+one adult chart across all ages is a named safety risk, and the two age groups
+fail in **opposite** directions:
+
+| | Adult chart error | Consequence |
+|---|---|---|
+| Children | **Over-reads** age-normal tachycardia and tachypnoea | Alarm fatigue; staff learn to ignore paediatric warnings |
+| Older adults | **Under-reads** blunted fever and relative hypotension | Genuine sepsis scores near zero |
+
+Measured on the live cohort: a completely well 2-year-old scores **0** on the
+paediatric chart and **7** on the adult chart. An 82-year-old with early sepsis
+scores **3** age-appropriately and **1** on the adult chart. Both figures are
+shown side by side in every non-adult patient's chart.
+
+Blood pressure is the exception and the trap. Paediatric hypotension is a late,
+near-terminal sign, so any hypotension in a child scores maximum. An early draft
+of the chart scored a shocked three-year-old at one point; a unit test caught it.
+
+---
+
+## Behaviour under surge
+
+Press **Simulate 3× surge** to admit 12 further arrivals inside ~11 simulated
+minutes — roughly three times the normal rate — on top of the 21 already waiting.
+
+**Nothing about the scoring changes, and that is the design choice.** A patient's
+physiology is indifferent to how busy the department is, and quietly relaxing
+thresholds under load is precisely how a system begins under-triaging exactly
+when the consequences are worst. What surge changes is what becomes *visible*:
+
+- arrivals in the last simulated hour roughly double
+- the count of patients past their safe re-assessment window rises
+- the flow-routing panel shows demand outstripping staffed bays
+
+The surge cohort is also where two teaching cases sit: a **well 2-year-old** who
+an adult chart would flag as an emergency, and an **88-year-old after a long lie**
+whose observations are unremarkable on adult thresholds.
+
+---
+
+## Regulatory position and data protection
+
+**Assumed jurisdiction: India — Digital Personal Data Protection Act 2023
+(DPDP), alongside the ABDM health-data framework.** GDPR would impose a broadly
+similar shape with a stricter automated-decision-making article; the design below
+is intended to satisfy the stricter reading.
+
+| Obligation | How the design meets it |
+|---|---|
+| **Purpose limitation** | Every field exists for triage. There is no ethnicity, community, region, religion, language, caste or payer column in the data model — see [Equity considerations](#equity-considerations) |
+| **Data minimisation** | The model receives ID, age band, sex, complaint, history, vitals. It is **not** given the patient's name, because a surname carries community and regional signal |
+| **No solely-automated decisions** | The model never assigns priority. A nurse may override at any time, one click, and the acuity in force is always the human's if one exists |
+| **Auditability** | Every model request and response, every fallback, every override with its stated reason and author, and every clock change is logged with a timestamp and is inspectable in the Audit trail tab |
+| **Explainability** | Every urgency score decomposes into named terms shown in the patient drawer. No score is displayed that cannot be explained |
+| **Storage limitation** | Nothing is persisted. The store is in-memory and dies with the process |
+| **Cross-border transfer** | Does not arise. Inference is local; the only network connection is to `127.0.0.1:11434` |
+
+**What a production deployment would still need**, and does not have here:
+role-based access control, per-clinician authentication on overrides (currently a
+demo user), encryption at rest once a database exists, a defined retention and
+erasure schedule, a documented consent model for secondary use, and a Data
+Protection Impact Assessment. These are governance work, not code, and are out of
+scope for a prototype on synthetic data.
+
+
+---
+
 ## Using the dashboard
 
 **Simulated clock.** All wait times are simulated minutes since the ED day start
@@ -364,11 +588,103 @@ decomposition term by term; a projection chart with the escalation threshold and
 
 ---
 
+## Flexing across hospitals
+
+The brief assumes departments from ~100 to 500+ visits a day, differing in
+specialty mix and technical maturity. A workflow tuned for a large urban trauma
+centre must not be the only thing on offer.
+
+**What is already configurable rather than hard-coded**
+
+| Varies by site | Mechanism |
+|---|---|
+| Urgency weights | `UrgencyWeights` is an injected object, not constants — see [`src/lib/urgency.ts`](src/lib/urgency.ts). A site supplies its own |
+| Which weights *need* tuning | The **Evidence** tab's sensitivity sweep tells a new site which constants the ordering actually depends on. Most come back insensitive, so a small site can adopt the defaults for those and tune only the few that matter |
+| Age charts | Table-driven in [`src/lib/ews.ts`](src/lib/ews.ts). PEWS is chart-specific in real use; a site swaps the tables, not the code |
+| Safe wait targets | `SAFE_WAIT_MINUTES` is a per-acuity table. ESI, ATS and CTAS set different targets |
+| Severity scale | Five-level ESI here, but nothing outside `AcuityLevel` assumes five |
+| Specialty mix | The risk-factor vocabulary is a closed enum. A cardiac centre or a paediatric hospital adds its own terms and weights without touching the engine |
+
+**Technical maturity — three deployment tiers**
+
+1. **No integration.** Runs standalone on one machine with a local model. A nurse
+   types the complaint and vitals. This works today, needs no hospital IT
+   project, and is the realistic entry point for a small or rural department —
+   the rule-based fallback means it runs with no GPU at all.
+2. **Read-only feed.** Consumes patient records and observations from the EHR;
+   still writes nothing back. Overrides live in this system's own audit log.
+3. **Bidirectional.** Writes acuity and re-assessment triggers back to the
+   patient record and the bed-management system.
+
+Most departments would sit at tier 1 or 2 for a long time, and the design does
+not assume otherwise.
+
+---
+
+## Integration with existing systems
+
+The seams are deliberately narrow — each is one small interface, not a dependency
+on a whole EHR.
+
+| System | Seam today | What production replaces it with |
+|---|---|---|
+| Patient records | `PriorRecord` — visits, conditions, medications, allergies, care plan | An HL7 FHIR `Patient` + `Condition` + `MedicationStatement` query. Deliberately a narrow projection: this is the entire EHR surface the assistant needs |
+| Observations | `projectVitals()` simulates drift | Replace with "read the latest recorded observation". Everything downstream is unchanged — this is the single most important seam, and the one the stale-observations case exists to stress |
+| Bed management | `flow.ts` takes a `Bed[]` | A live bay-status feed |
+| **Staff rosters** | **Not modelled.** Capacity is a constant (`STAFFED_CAPACITY_PER_HOUR`) | **An honest gap.** Real surge response depends on who is actually on shift and what skill mix they have. A single capacity number cannot express "two doctors but no paediatric-trained nurse", which is exactly the constraint that decides whether the 3-year-old gets seen |
+
+---
+
+## Adoption and change management
+
+A triage tool that fatigued staff route around is worse than no tool, because it
+still absorbs attention and still carries liability. The design choices below are
+aimed squarely at that risk rather than at accuracy.
+
+**It never blocks.** The assistant is advisory. A nurse can ignore every number
+on the screen and the queue still functions. Nothing waits on a model response —
+patients appear immediately and scores fill in behind them.
+
+**Overriding is one click and always available.** If disagreeing with the system
+is slow or requires justification through a form, staff stop disagreeing with it
+and start disagreeing with it *silently* — which destroys the audit trail. A
+reason is requested, not enforced.
+
+**It explains itself in the same glance as the number.** Every urgency score
+decomposes into named terms in the patient drawer. Trust comes from
+inspectability, not from accuracy claims a nurse has no way to verify at 3 a.m.
+No score is ever displayed that cannot be decomposed.
+
+**It asks for no new data entry.** Every input is something triage already
+records. Any tool that adds keystrokes to a triage assessment will lose.
+
+**Override rate is the adoption metric, and both extremes are bad.** A very high
+override rate means the model is wrong and should be recalibrated. A near-zero
+rate is worse — it means automation bias, staff deferring to a number they have
+stopped reading. The audit panel makes both visible, and neither is treated as
+success.
+
+**The audit is aimed at the department, not the individual.** Naming individual
+nurses on a wallboard would guarantee rejection and would be indefensible on
+these sample sizes anyway. Findings are reported at cohort level over time.
+
+**Phased introduction.** The honest rollout is silent-mode first: run it in
+shadow for weeks, changing nothing, and show the department its own historical
+numbers — its own wait-time breaches, its own override patterns — before it is
+allowed to influence a queue. A tool that arrives already telling people they
+were wrong does not get adopted.
+
+
+---
+
 ## Scalability
 
 The prototype is a single-process in-memory store, which is the right choice for a
 hackathon and the wrong choice for a department. What would have to change, and
 what would not:
+
+**Assumed volume: 100–500+ visits per day**, per the brief. At the top of that
+range a department sees roughly 20 arrivals an hour at peak.
 
 **What already scales.** The expensive AI call happens **once per patient at
 intake**, not per refresh. Continuous re-scoring is pure arithmetic over five
@@ -540,7 +856,8 @@ src/
   lib/
     types.ts       Shared domain types
     seed.ts        The 18 synthetic patients — both demo stories live here
-    urgency.ts     NEWS + the time-decay urgency formula (no AI)
+    ews.ts         Age-stratified early warning score, six bands (no AI)
+    urgency.ts     Time-decay urgency + precautionary uplift (no AI)
     analysis.ts    Ablation + sensitivity self-evaluation over the live cohort
     ollama.ts      Local LLM transport, health check, JSON extraction
     scorer.ts      Prompt, schema, validation, retry, rule-based fallback
@@ -557,6 +874,7 @@ src/
       clock/       POST — rate / jump / goto
       override/    POST — record or revert a nurse override
       score/       POST — re-score one patient or sweep all
+      surge/       POST — admit the 3x surge cohort
       reset/       POST — reseed the department
   components/      Dashboard, queue, drawer, evidence, audit, surge, flow, log
   lib/__tests__/   Unit tests for the urgency model and audit statistics
@@ -569,17 +887,23 @@ npm run dev        # dev server on :3000
 npm run build      # production build
 npm start          # serve the production build
 npm run typecheck  # tsc --noEmit
-npm test           # vitest — 37 unit tests over the urgency model and the audit statistics
+npm test           # vitest — 51 unit tests over scoring, safety margin and audit statistics
 npm run test:watch
 ```
 
-Tests cover the parts where a silent error would be worst: NEWS band boundaries
+Tests cover the parts where a silent error would be worst: age-band routing and
+paediatric hypotension (a draft chart scored a shocked three-year-old at one
+point — the test caught it), the one-directional property of the precautionary
+uplift swept across every combination of uncertainty, NEWS band boundaries
 vital-by-vital, urgency term decomposition and monotonicity, the wait-pressure
 cap, staleness and inflection behaviour in the projection, the Benjamini–Hochberg
 step-up rule, and — importantly — that `validateScore` drops hallucinated risk
 factors, so nothing the model invents can ever reach an urgency weight.
 
 ## Data and privacy
+
+See [Regulatory position and data protection](#regulatory-position-and-data-protection)
+for the compliance mapping. In short:
 
 No real patient data is used, stored, or transmitted, and none may be. All 18
 patients are fabricated in [`src/lib/seed.ts`](src/lib/seed.ts) — names are

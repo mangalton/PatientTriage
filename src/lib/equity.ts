@@ -33,7 +33,8 @@
  */
 
 import { ARRIVAL_MODES } from "./types";
-import { newsScore, projectVitals } from "./urgency";
+import { earlyWarningScore } from "./ews";
+import { projectVitals } from "./urgency";
 import type {
   ArrivalMode,
   EquityFinding,
@@ -320,8 +321,9 @@ export function buildEquityReport(
     if (!p) continue;
 
     const waitAtOverride = Math.max(0, o.atSimMinutes - p.arrivalSimMinutes);
-    const newsAtOverride = newsScore(
+    const newsAtOverride = earlyWarningScore(
       projectVitals(p.arrivalVitals, p.trajectory, waitAtOverride, p.id).vitals,
+      p.age,
     );
     // Flag if physiology was already abnormal at the time, or has since become so.
     if (newsAtOverride < CONTRADICTION_NEWS && p.news < CONTRADICTION_NEWS) continue;

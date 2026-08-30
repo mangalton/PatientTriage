@@ -94,6 +94,12 @@ export function StatStrip({ state }: { state: DashboardState }) {
         }
       />
       <Stat
+        label="Re-assess overdue"
+        value={String(patients.filter((p) => p.reassessOverdue).length)}
+        tone={patients.some((p) => p.reassessOverdue) ? "red" : "green"}
+        caption="past the wait their acuity safely permits"
+      />
+      <Stat
         label="Longest wait"
         value={longest ? formatDuration(longest.waitMinutes) : "—"}
         tone="neutral"

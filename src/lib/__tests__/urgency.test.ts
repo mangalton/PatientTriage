@@ -9,10 +9,19 @@ import {
   RISK_FACTOR_WEIGHT,
   computeUrgency,
   escalationStatus,
+  precautionaryUplift,
+  SAFE_WAIT_MINUTES,
+  UPLIFT,
   findEscalationCrossing,
   newsScore,
   projectVitals,
 } from "../urgency";
+import {
+  adultChartScore,
+  ageBandFor,
+  earlyWarningScore,
+  ewsContributions,
+} from "../ews";
 import type { Vitals } from "../types";
 
 const NORMAL: Vitals = { hr: 74, sbp: 124, dbp: 78, rr: 16, spo2: 98, temp: 36.7 };
@@ -97,6 +106,9 @@ describe("computeUrgency", () => {
     atypical: false,
     ambient: false,
     vitals: NORMAL,
+    age: 40,
+    ageBand: "adult" as const,
+    confidence: 1,
   };
 
   it("at arrival with normal vitals is exactly the base for the level", () => {
@@ -114,6 +126,7 @@ describe("computeUrgency", () => {
     });
     const sum =
       b.base +
+      b.precautionaryUplift +
       b.waitPressure +
       b.atypicalBoost +
       b.riskFactorBoost +
@@ -178,6 +191,9 @@ describe("computeUrgency", () => {
       atypical: true,
       ambient: true,
       riskFactors: ["airway_compromise"],
+      age: 40,
+      ageBand: "adult",
+      confidence: 0,
       vitals: { hr: 190, sbp: 60, dbp: 40, rr: 40, spo2: 70, temp: 34 },
     });
     expect(b.total).toBeLessThanOrEqual(DEFAULT_WEIGHTS.urgencyMax);
@@ -195,13 +211,13 @@ describe("escalationStatus", () => {
 
 describe("findEscalationCrossing", () => {
   it("returns null for a patient who never crosses", () => {
-    const crossing = findEscalationCrossing(NORMAL, {}, 5, false, false, []);
+    const crossing = findEscalationCrossing({ arrivalVitals: NORMAL, trajectory: {}, acuity: 5, atypical: false, ambient: false, age: 40, ageBand: "adult" });
     expect(crossing).toBeNull();
   });
 
   it("finds the first minute a deteriorating patient crosses", () => {
     const traj = { hr: 0.3, sbp: -0.32, rr: 0.045, spo2: -0.022 };
-    const crossing = findEscalationCrossing(NORMAL, traj, 4, true, false, []);
+    const crossing = findEscalationCrossing({ arrivalVitals: NORMAL, trajectory: traj, acuity: 4, atypical: true, ambient: false, age: 40, ageBand: "adult" });
     expect(crossing).not.toBeNull();
     // And the urgency at that minute really is at or above the threshold.
     const u = computeUrgency({
@@ -209,6 +225,8 @@ describe("findEscalationCrossing", () => {
       waitMinutes: crossing!,
       atypical: true,
       ambient: false,
+      age: 40,
+      ageBand: "adult",
       vitals: projectVitals(NORMAL, traj, crossing!).vitals,
     }).total;
     expect(u).toBeGreaterThanOrEqual(ESCALATION_THRESHOLD);
@@ -216,8 +234,178 @@ describe("findEscalationCrossing", () => {
 
   it("is memoised — repeated calls return an identical answer", () => {
     const traj = { hr: 0.3, sbp: -0.3 };
-    const a = findEscalationCrossing(NORMAL, traj, 3, false, false, []);
-    const b = findEscalationCrossing(NORMAL, traj, 3, false, false, []);
+    const a = findEscalationCrossing({ arrivalVitals: NORMAL, trajectory: traj, acuity: 3, atypical: false, ambient: false, age: 40, ageBand: "adult" });
+    const b = findEscalationCrossing({ arrivalVitals: NORMAL, trajectory: traj, acuity: 3, atypical: false, ambient: false, age: 40, ageBand: "adult" });
     expect(a).toBe(b);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Age stratification — the safety property the brief names explicitly
+// ---------------------------------------------------------------------------
+
+describe("age-stratified early warning scoring", () => {
+  it("bands ages onto the right chart", () => {
+    expect(ageBandFor(0.5)).toBe("infant");
+    expect(ageBandFor(3)).toBe("toddler");
+    expect(ageBandFor(8)).toBe("child");
+    expect(ageBandFor(14)).toBe("adolescent");
+    expect(ageBandFor(40)).toBe("adult");
+    expect(ageBandFor(80)).toBe("older adult");
+  });
+
+  it("does not panic about a well infant that the adult chart would flag", () => {
+    // HR 140 and RR 40 are normal for a 6-month-old and alarming in an adult.
+    const wellInfant: Vitals = { hr: 140, sbp: 85, dbp: 50, rr: 40, spo2: 98, temp: 36.9 };
+    expect(earlyWarningScore(wellInfant, 0.5)).toBe(0);
+    expect(adultChartScore(wellInfant)).toBeGreaterThanOrEqual(5);
+  });
+
+  it("scores paediatric hypotension as the pre-terminal sign it is", () => {
+    // 72 systolic in a three-year-old is decompensated shock (hypotension is
+    // roughly below 70 + 2 x age). Children vasoconstrict and hold their blood
+    // pressure until they are close to arrest, so any hypotension must score
+    // maximum. An earlier version of this chart scored it 1 point.
+    const shocked: Vitals = { hr: 175, sbp: 72, dbp: 40, rr: 46, spo2: 94, temp: 38.2 };
+    expect(ewsContributions(shocked, 3).sbp).toBe(3);
+    expect(earlyWarningScore(shocked, 3)).toBeGreaterThanOrEqual(8);
+  });
+
+  it("does not over-read a child's normal tachycardia and tachypnoea", () => {
+    // The adult chart's failure mode for children is the opposite of the
+    // geriatric one: it treats age-appropriate physiology as an emergency,
+    // which produces alarm fatigue rather than missed cases.
+    const distressedToddler: Vitals = {
+      hr: 150, sbp: 96, dbp: 60, rr: 34, spo2: 97, temp: 38,
+    };
+    const paeds = ewsContributions(distressedToddler, 3);
+    const adultHr = ewsContributions(distressedToddler, 40).hr;
+    const adultRr = ewsContributions(distressedToddler, 40).rr;
+    expect(paeds.hr).toBeLessThan(adultHr);
+    expect(paeds.rr).toBeLessThan(adultRr);
+    expect(earlyWarningScore(distressedToddler, 3)).toBeLessThan(
+      adultChartScore(distressedToddler),
+    );
+  });
+
+  it("treats a low-grade fever in an older adult as a real signal", () => {
+    // Blunted febrile response: 37.8 is meaningful at 80 and ignored at 30.
+    const v: Vitals = { hr: 88, sbp: 118, dbp: 70, rr: 18, spo2: 97, temp: 37.8 };
+    expect(earlyWarningScore(v, 80)).toBeGreaterThan(earlyWarningScore(v, 30));
+  });
+
+  it("treats relative hypotension in an older adult as a real signal", () => {
+    const v: Vitals = { hr: 82, sbp: 115, dbp: 70, rr: 16, spo2: 97, temp: 36.8 };
+    expect(earlyWarningScore(v, 80)).toBeGreaterThan(earlyWarningScore(v, 30));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Safety-first: uncertainty must escalate, never relax
+// ---------------------------------------------------------------------------
+
+describe("precautionary uplift", () => {
+  const adultBase = {
+    acuity: 3 as const,
+    waitMinutes: 0,
+    atypical: false,
+    ambient: false,
+    vitals: NORMAL,
+    age: 40,
+    ageBand: "adult" as const,
+  };
+
+  it("adds nothing when the picture is complete and the model is confident", () => {
+    expect(precautionaryUplift({ ...adultBase, confidence: 0.95 }).total).toBe(0);
+  });
+
+  it("escalates as model confidence falls", () => {
+    const mid = precautionaryUplift({ ...adultBase, confidence: 0.4 }).total;
+    const low = precautionaryUplift({ ...adultBase, confidence: 0.1 }).total;
+    expect(mid).toBeGreaterThan(0);
+    expect(low).toBeGreaterThan(mid);
+  });
+
+  it("escalates for a first presentation with no record on file", () => {
+    const u = precautionaryUplift({
+      ...adultBase,
+      confidence: 1,
+      completeness: {
+        score: 0.5,
+        missing: ["prior record"],
+        hasPriorRecord: false,
+        hasFullVitals: true,
+        zeroHistory: true,
+      },
+    });
+    expect(u.total).toBe(UPLIFT.zeroHistory);
+    expect(u.reasons.join()).toMatch(/no record/i);
+  });
+
+  it("escalates for every observation that could not be obtained", () => {
+    const u = precautionaryUplift({
+      ...adultBase,
+      confidence: 1,
+      completeness: {
+        score: 0.7,
+        missing: ["vital:sbp", "vital:temp"],
+        hasPriorRecord: true,
+        hasFullVitals: false,
+        zeroHistory: false,
+      },
+    });
+    expect(u.total).toBe(2 * UPLIFT.perMissingVital);
+  });
+
+  it("carries a standing margin for children and older adults", () => {
+    expect(
+      precautionaryUplift({ ...adultBase, ageBand: "toddler", age: 3, confidence: 1 })
+        .total,
+    ).toBe(UPLIFT.paediatricMargin);
+    expect(
+      precautionaryUplift({ ...adultBase, ageBand: "older adult", age: 80, confidence: 1 })
+        .total,
+    ).toBe(UPLIFT.geriatricMargin);
+  });
+
+  it("IS ONE-DIRECTIONAL — uncertainty can never lower a score", () => {
+    // The central safety property. Sweep every combination of uncertainty and
+    // assert none of them ever produces a negative contribution.
+    for (const confidence of [0, 0.2, 0.5, 0.7, 1]) {
+      for (const zeroHistory of [true, false]) {
+        for (const hasFullVitals of [true, false]) {
+          for (const ageBand of ["infant", "child", "adult", "older adult"] as const) {
+            const u = precautionaryUplift({
+              ...adultBase,
+              ageBand,
+              confidence,
+              completeness: {
+                score: 0.5,
+                missing: hasFullVitals ? [] : ["vital:sbp"],
+                hasPriorRecord: !zeroHistory,
+                hasFullVitals,
+                zeroHistory,
+              },
+            });
+            expect(u.total).toBeGreaterThanOrEqual(0);
+          }
+        }
+      }
+    }
+  });
+
+  it("means a low-confidence patient outranks an identical confident one", () => {
+    const confident = computeUrgency({ ...adultBase, confidence: 0.95 }).total;
+    const unsure = computeUrgency({ ...adultBase, confidence: 0.2 }).total;
+    expect(unsure).toBeGreaterThan(confident);
+  });
+});
+
+describe("SAFE_WAIT_MINUTES", () => {
+  it("is stricter for more urgent patients", () => {
+    expect(SAFE_WAIT_MINUTES[1]).toBeLessThan(SAFE_WAIT_MINUTES[2]);
+    expect(SAFE_WAIT_MINUTES[2]).toBeLessThan(SAFE_WAIT_MINUTES[3]);
+    expect(SAFE_WAIT_MINUTES[3]).toBeLessThan(SAFE_WAIT_MINUTES[4]);
+    expect(SAFE_WAIT_MINUTES[4]).toBeLessThan(SAFE_WAIT_MINUTES[5]);
   });
 });
