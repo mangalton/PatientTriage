@@ -2,10 +2,6 @@
 
 **A prototype for continuously re-scored emergency department triage.**
 
-> ⚠️ **Prototype / demo only. Not a medical device. Not clinically validated. Every
-> patient and vital sign in this repository is synthetic and
-> fabricated. Nothing here may be used to make a decision about a real person.**
-
 Runs entirely on your own machine against a local open-source LLM served by
 [Ollama](https://ollama.com). No API key, no cloud service, no network egress.
 
@@ -194,84 +190,6 @@ and medical-tuned open models like BioMistral. Nothing in the code is
 Llama-specific; the only requirement is that the model can follow a JSON schema.
 
 ---
-
-## The two-minute demo
-
-The dashboard opens with a **Demo narrative** strip at the top containing two
-cards. Each states a claim and has a button that moves the simulation to the
-moment that proves it.
-
-### Story 1 — silent deterioration
-
-**M. Mehra**, 58, arrived 12 simulated minutes ago with *"indigestion and mild
-jaw ache after yard work"*. He is diabetic, his father had an MI at 61, and he is
-visibly diaphoretic — but **every arrival vital is normal. NEWS 0.** A nurse has
-already downgraded him one ESI level: *"Ambulatory and comfortable; symptoms
-consistent with reflux."*
-
-He sits at **queue position #14 of 18, status Stable.** Under a static intake
-score, that is where he stays for his entire wait.
-
-Press **"Fast-forward 90 min & open his chart"**:
-
-| | At arrival | +90 min |
-|---|---|---|
-| Queue position | #14 | **#9 (▲5)** |
-| Status | Stable | **Escalated** |
-| Urgency | 57.7 | **92.6** |
-| NEWS | 0 | **6** |
-| HR | 84 | 111 |
-| Systolic BP | 132 | 103 |
-| Resp rate | 17 | 21 |
-| SpO₂ | 97% | 95% |
-
-He crossed the escalation threshold at **+78 minutes** into his wait. The patient
-drawer shows the entire arithmetic — every term of the urgency formula, a
-projection chart of his urgency across the whole wait with the escalation
-threshold and "now" marked, and the arrival-vs-current value of each vital with
-its NEWS contribution.
-
-Nothing about this required the model to be *right* on arrival. It only required
-the system to keep looking.
-
-### Story 2 — a gap in the override layer
-
-**This system records nothing about who a patient is.** There is no ethnicity,
-community, region, religion, language, caste or payer column in the data model —
-so there is none to audit. That is a deliberate constraint, and the audit does
-not need one. It holds the override layer to account on two axes that require no
-profiling at all.
-
-Press **"Open the equity audit"**. It reports:
-
-- **Every downgrade landed on someone who walked in.** 5 of 10 walk-in patients
-  were downgraded by a nurse override, versus 0 of 8 who arrived by ambulance or
-  on referral. Arrival route is an encounter fact, not an attribute of the
-  person — and it is a documented anchor on triage judgement: a patient who walks
-  in gets under-triaged relative to a clinically identical patient delivered by
-  ambulance.
-- **The gap survives severity matching.** Restricted to patients whose measured
-  physiology is comparably abnormal (NEWS ≥ 3), walk-ins still average a less
-  urgent acuity than everyone else. "They were less sick" does not explain it,
-  because NEWS says they were not.
-- **Three downgrades contradicted the patient's own vital signs.** This check
-  uses no grouping variable whatsoever — each patient is compared only against
-  themselves. It is the stronger of the two axes and the one worth watching,
-  because it fires on the *first* unsafe override rather than waiting for a
-  statistically detectable pattern to accumulate.
-
-The justifications attached to those overrides are visible in each patient's
-drawer, and they are the point: *"Frequent presenter; likely gastritis."*
-*"Requesting analgesia by name; no documented red-flag features."* *"Pain score
-inconsistent with observed behaviour"* — on a patient with sickle cell disease
-and a documented personal care plan. None of them cite a vital sign.
-
-The panel is labelled **audit only**, and it means it: nothing in
-[`src/lib/equity.ts`](src/lib/equity.ts) writes to a patient. It is a read-only
-computation over the cohort.
-
----
-
 ## How AI is used, module by module
 
 ### Module 1 — Synthetic patient generator ([`src/lib/seed.ts`](src/lib/seed.ts))
