@@ -820,9 +820,6 @@ factors, so nothing the model invents can ever reach an urgency weight.
 
 ## Data and privacy
 
-See [Regulatory position and data protection](#regulatory-position-and-data-protection)
-for the compliance mapping. In short:
-
 No real patient data is used, stored, or transmitted, and none may be. All 18
 patients are fabricated in [`src/lib/seed.ts`](src/lib/seed.ts) — names are
 randomly assembled and correspond to no one. There is no database, no persistence
